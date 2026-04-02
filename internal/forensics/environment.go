@@ -42,14 +42,19 @@ func (ea *EnvironmentAnalyzer) FindSecrets(ctx context.Context, containerID stri
 
 	for varName, value := range envVars {
 		lowerName := strings.ToLower(varName)
+		matched := false
 
 		for _, pattern := range secrets {
 			for _, p := range pattern.Patterns {
 				if strings.Contains(lowerName, p) {
 					found[varName] = redactValue(value)
 					secretNames = append(secretNames, varName)
+					matched = true
 					break
 				}
+			}
+			if matched {
+				break
 			}
 		}
 	}
@@ -134,18 +139,18 @@ func categorizeEnvVars(envVars map[string]string) map[string]int {
 
 		if strings.Contains(lower, "path") {
 			categories["path"]++
+		} else if strings.Contains(lower, "java") {
+			categories["java"]++
+		} else if strings.Contains(lower, "python") {
+			categories["python"]++
+		} else if strings.Contains(lower, "node") || strings.Contains(lower, "npm") {
+			categories["nodejs"]++
 		} else if strings.Contains(lower, "home") || strings.Contains(lower, "user") {
 			categories["user"]++
 		} else if strings.Contains(lower, "lang") || strings.Contains(lower, "locale") {
 			categories["locale"]++
 		} else if strings.Contains(lower, "docker") {
 			categories["docker"]++
-		} else if strings.Contains(lower, "node") || strings.Contains(lower, "npm") {
-			categories["nodejs"]++
-		} else if strings.Contains(lower, "python") {
-			categories["python"]++
-		} else if strings.Contains(lower, "java") {
-			categories["java"]++
 		} else if strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "key") {
 			categories["secrets"]++
 		} else {

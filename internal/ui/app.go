@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -11,6 +12,7 @@ import (
 	"github.com/kristinb/bonestack/internal/forensics"
 	"github.com/kristinb/bonestack/internal/layers"
 	"github.com/kristinb/bonestack/internal/models"
+	"github.com/kristinb/bonestack/internal/sde"
 )
 
 var (
@@ -45,6 +47,7 @@ type App struct {
 	logAnalyzer         *forensics.LogAnalyzer
 	envAnalyzer         *forensics.EnvironmentAnalyzer
 	resourceMonitor     *forensics.ResourceMonitor
+	scaffoldGenerator   *sde.Generator
 	state               *models.AppState
 	width               int
 	height              int
@@ -66,6 +69,7 @@ func NewApp(ctx context.Context, dockerClient *docker.Client) *App {
 		logAnalyzer:        forensics.NewLogAnalyzer(containerInspector),
 		envAnalyzer:        forensics.NewEnvironmentAnalyzer(containerInspector),
 		resourceMonitor:    forensics.NewResourceMonitor(containerInspector),
+		scaffoldGenerator:  sde.NewGenerator(),
 		ctx:                ctx,
 		selectedIndex:      0,
 		state: &models.AppState{
@@ -125,6 +129,10 @@ func (a *App) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleSizeBreakdownKeys(msg)
 	case "file-browser":
 		return a.handleFileBrowserKeys(msg)
+	case "optimization":
+		return a.handleOptimizationKeys(msg)
+	case "scaffold":
+		return a.handleScaffoldKeys(msg)
 	case "forensics-menu":
 		return a.handleForensicsMenuKeys(msg)
 	case "filesystem":
@@ -135,6 +143,10 @@ func (a *App) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleVolumesKeys(msg)
 	case "logs":
 		return a.handleLogsKeys(msg)
+	case "environment":
+		return a.handleEnvironmentKeys(msg)
+	case "resources":
+		return a.handleResourcesKeys(msg)
 	}
 
 	return a, nil
@@ -208,6 +220,10 @@ func (a *App) handleImageDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "l":
 		// Load and analyze layers
 		return a, a.loadLayers()
+	case "g":
+		a.state.CurrentScreen = "scaffold"
+	case "o":
+		a.state.CurrentScreen = "optimization"
 	case "esc", "b":
 		a.state.CurrentScreen = "images"
 		a.selectedIndex = 0
@@ -248,6 +264,10 @@ func (a *App) View() string {
 		return a.renderSizeBreakdown()
 	case "file-browser":
 		return a.renderFileBrowser()
+	case "optimization":
+		return a.renderOptimization()
+	case "scaffold":
+		return a.renderScaffold()
 	case "forensics-menu":
 		return a.renderForensicsMenu()
 	case "filesystem":
@@ -258,6 +278,10 @@ func (a *App) View() string {
 		return a.renderVolumes()
 	case "logs":
 		return a.renderLogs()
+	case "environment":
+		return a.renderEnvironment()
+	case "resources":
+		return a.renderResources()
 	default:
 		return "Unknown screen"
 	}
@@ -420,7 +444,7 @@ func (a *App) renderContainerDetail() string {
 		}
 	}
 
-	detail.WriteString("\n" + helpStyle.Render("f Forensics | b Back | q Quit"))
+	detail.WriteString("\n" + helpStyle.Render("f Forensics | o Optimize | g Generate Dockerfile | b Back | q Quit"))
 	return detail.String()
 }
 
@@ -439,6 +463,8 @@ func (a *App) handleLayersKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		// Show size breakdown
 		a.state.CurrentScreen = "size-breakdown"
+	case "o":
+		a.state.CurrentScreen = "optimization"
 	case "esc", "b":
 		a.state.CurrentScreen = "image-detail"
 		a.state.SelectedLayerIndex = 0
@@ -469,6 +495,22 @@ func (a *App) handleFileBrowserKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "b":
 		a.state.CurrentScreen = "layer-detail"
+	}
+	return a, nil
+}
+
+func (a *App) handleOptimizationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "b":
+		a.state.CurrentScreen = "image-detail"
+	}
+	return a, nil
+}
+
+func (a *App) handleScaffoldKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "b":
+		a.state.CurrentScreen = "image-detail"
 	}
 	return a, nil
 }
@@ -505,7 +547,7 @@ func (a *App) renderLayers() string {
 		}
 	}
 
-	output.WriteString("\n" + helpStyle.Render("↑/↓ Navigate | Enter Details | s Size Breakdown | b Back | q Quit"))
+	output.WriteString("\n" + helpStyle.Render("↑/↓ Navigate | Enter Details | s Size Breakdown | o Optimize | b Back | q Quit"))
 	return output.String()
 }
 
@@ -661,6 +703,7 @@ func (a *App) loadLayers() tea.Cmd {
 		analyses, _ := a.layerAnalyzer.AnalyzeLayerSequence(imageLayers)
 		bloatMap := a.bloatDetector.DetectInImage(imageLayers)
 		recommendations := a.bloatDetector.GenerateRecommendations(imageLayers, bloatMap)
+		a.state.OptimizationReport = a.bloatDetector.BuildOptimizationReport(imageLayers, bloatMap)
 
 		return layersLoadedMsg{
 			layers:          imageLayers,
@@ -801,9 +844,9 @@ func (a *App) handleForensicsMenuKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "Logs":
 			a.state.CurrentScreen = "logs"
 		case "Environment":
-			// TODO: Add environment screen
+			a.state.CurrentScreen = "environment"
 		case "Resources":
-			// TODO: Add resources screen
+			a.state.CurrentScreen = "resources"
 		}
 		a.selectedIndex = 0
 	case "esc", "b":
@@ -843,9 +886,16 @@ func (a *App) renderForensicsMenu() string {
 
 func (a *App) handleFilesystemKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "up", "k":
+		if a.state.ScrollOffset > 0 {
+			a.state.ScrollOffset--
+		}
+	case "down", "j":
+		a.state.ScrollOffset++
 	case "esc", "b":
 		a.state.CurrentScreen = "forensics-menu"
 		a.selectedIndex = 0
+		a.state.ScrollOffset = 0
 	}
 	return a, nil
 }
@@ -864,21 +914,40 @@ func (a *App) renderFilesystem() string {
 	if err != nil {
 		fs.WriteString(fmt.Sprintf("Error listing directory: %v\n", err))
 	} else {
-		fs.WriteString("Root Directory Contents:\n\n")
-		for i, file := range files {
-			if i >= 20 {
-				fs.WriteString(fmt.Sprintf("... and %d more files\n", len(files)-i))
-				break
-			}
+		fs.WriteString(fmt.Sprintf("Root Directory Contents: %d entries\n\n", len(files)))
+
+		start := a.state.ScrollOffset
+		if start < 0 {
+			start = 0
+		}
+		if start > len(files)-1 && len(files) > 0 {
+			start = len(files) - 1
+		}
+
+		visibleRows := 15
+		if a.height > 12 {
+			visibleRows = a.height - 10
+		}
+		end := start + visibleRows
+		if end > len(files) {
+			end = len(files)
+		}
+
+		for i := start; i < end; i++ {
+			file := files[i]
 			kind := "file"
 			if file.IsDir {
 				kind = "dir"
 			}
 			fs.WriteString(fmt.Sprintf("  %-4s %s\n", kind, file.Path))
 		}
+
+		if len(files) > visibleRows {
+			fs.WriteString(fmt.Sprintf("\n(Showing entries %d-%d of %d)\n", start+1, end, len(files)))
+		}
 	}
 
-	fs.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	fs.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | b Back | q Quit"))
 	return fs.String()
 }
 
@@ -1047,4 +1116,244 @@ func (a *App) renderLogs() string {
 
 	logs.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | b Back | q Quit"))
 	return logs.String()
+}
+
+func (a *App) handleEnvironmentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "b":
+		a.state.CurrentScreen = "forensics-menu"
+		a.selectedIndex = 0
+	}
+	return a, nil
+}
+
+func (a *App) renderEnvironment() string {
+	var env strings.Builder
+	env.WriteString(titleStyle.Render("🌿 Environment") + "\n\n")
+
+	if a.envAnalyzer == nil {
+		env.WriteString("Error: Environment analyzer not initialized\n")
+		return env.String()
+	}
+
+	envVars, err := a.envAnalyzer.GetEnvironmentVariables(a.ctx, a.state.SelectedContainer.ID)
+	if err != nil {
+		env.WriteString(fmt.Sprintf("Error getting environment variables: %v\n", err))
+		env.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+		return env.String()
+	}
+
+	summary, _ := a.envAnalyzer.GetEnvironmentSummary(a.ctx, a.state.SelectedContainer.ID)
+	secrets, secretNames, _ := a.envAnalyzer.FindSecrets(a.ctx, a.state.SelectedContainer.ID)
+	a.state.EnvironmentVars = envVars
+	a.state.SecretVars = secretNames
+
+	env.WriteString(fmt.Sprintf("Variables: %d\n", len(envVars)))
+	if secretCount, ok := summary["secret_count"].(int); ok {
+		env.WriteString(fmt.Sprintf("Potential Secrets: %d\n", secretCount))
+	}
+
+	if categories, ok := summary["categories"].(map[string]int); ok && len(categories) > 0 {
+		env.WriteString("\nCategories:\n")
+		for _, line := range sortedIntMapLines(categories) {
+			env.WriteString("  " + line + "\n")
+		}
+	}
+
+	if len(secrets) > 0 {
+		env.WriteString("\nPotential Secrets:\n")
+		for _, line := range sortedStringMapLines(secrets, 8) {
+			env.WriteString("  " + line + "\n")
+		}
+	} else {
+		env.WriteString("\nPotential Secrets:\n  none detected\n")
+	}
+
+	env.WriteString("\nSample Variables:\n")
+	for _, line := range sortedStringMapLines(envVars, 12) {
+		env.WriteString("  " + line + "\n")
+	}
+
+	env.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	return env.String()
+}
+
+func (a *App) handleResourcesKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "b":
+		a.state.CurrentScreen = "forensics-menu"
+		a.selectedIndex = 0
+	}
+	return a, nil
+}
+
+func (a *App) renderResources() string {
+	var res strings.Builder
+	res.WriteString(titleStyle.Render("📈 Resources") + "\n\n")
+
+	if a.resourceMonitor == nil {
+		res.WriteString("Error: Resource monitor not initialized\n")
+		return res.String()
+	}
+
+	stats, err := a.resourceMonitor.GetStats(a.ctx, a.state.SelectedContainer.ID)
+	if err != nil {
+		res.WriteString(fmt.Sprintf("Error getting resource stats: %v\n", err))
+		res.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+		return res.String()
+	}
+
+	a.state.ResourceStats = stats
+	res.WriteString(fmt.Sprintf("Resource Status:    %s\n", resourceHealth(stats)))
+	res.WriteString(fmt.Sprintf("CPU Load Estimate: %.2f%%\n", stats.CPUPercent))
+	res.WriteString(fmt.Sprintf("Memory Used:       %.2f MB\n", stats.MemoryUsageMB))
+	res.WriteString(fmt.Sprintf("Memory Limit:      %.2f MB\n", stats.MemoryLimitMB))
+	res.WriteString(fmt.Sprintf("Memory Percent:    %.1f%%\n", stats.MemoryPercent))
+	res.WriteString(fmt.Sprintf("Process Count:     %d\n", stats.ProcessCount))
+
+	if stats.MemoryLimitMB > 0 {
+		res.WriteString("\nMemory Usage:\n")
+		res.WriteString(fmt.Sprintf("  %s %.1f%%\n", generateBar(int(stats.MemoryPercent), 20), stats.MemoryPercent))
+	}
+
+	res.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	return res.String()
+}
+
+func (a *App) renderOptimization() string {
+	var output strings.Builder
+	output.WriteString(titleStyle.Render("⚡ Optimization Suggestions") + "\n\n")
+
+	if a.state.ImageLayers == nil {
+		output.WriteString("Load layer analysis first from image details.\n\n")
+		output.WriteString(helpStyle.Render("Open an image and press l before viewing optimization advice."))
+		output.WriteString("\n\n" + helpStyle.Render("b Back | q Quit"))
+		return output.String()
+	}
+
+	report := a.bloatDetector.BuildOptimizationReport(a.state.ImageLayers, a.state.BloatDetection)
+	a.state.OptimizationReport = report
+
+	output.WriteString(fmt.Sprintf("Layers:             %d\n", report.LayerCount))
+	output.WriteString(fmt.Sprintf("Bloat Findings:     %d\n", report.BloatItemCount))
+	output.WriteString(fmt.Sprintf("Estimated Savings:  %s\n", layers.SizeFormatter(report.EstimatedSavings)))
+	output.WriteString(fmt.Sprintf("Largest Layer Share: %.1f%%\n", largestLayerPercent(a.state.ImageLayers)))
+
+	output.WriteString("\nRecommendations:\n")
+	if len(report.Recommendations) == 0 {
+		output.WriteString("  No obvious optimizations detected from current heuristics.\n")
+	} else {
+		for i, rec := range report.Recommendations {
+			output.WriteString(fmt.Sprintf("  %d. %s\n", i+1, rec))
+		}
+	}
+
+	output.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	return output.String()
+}
+
+func (a *App) renderScaffold() string {
+	var output strings.Builder
+	output.WriteString(titleStyle.Render("🧱 SDE Scaffold") + "\n\n")
+
+	if a.docker == nil {
+		output.WriteString("Error inspecting image: Docker client not initialized\n")
+		output.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+		return output.String()
+	}
+
+	inspect, err := a.docker.InspectImage(a.ctx, a.state.SelectedImage.ID)
+	if err != nil {
+		output.WriteString(fmt.Sprintf("Error inspecting image: %v\n", err))
+		output.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+		return output.String()
+	}
+
+	imageName := safeSlice(a.state.SelectedImage.ID, 12)
+	if len(a.state.SelectedImage.RepoTags) > 0 {
+		imageName = a.state.SelectedImage.RepoTags[0]
+	}
+
+	scaffold := a.scaffoldGenerator.Generate(imageName, inspect)
+	a.state.Scaffold = scaffold
+
+	output.WriteString(fmt.Sprintf("Base Image:   %s\n", scaffold.Profile.BaseImage))
+	output.WriteString(fmt.Sprintf("Runtime:      %s\n", scaffold.Profile.Runtime))
+	output.WriteString(fmt.Sprintf("Workdir:      %s\n", scaffold.Profile.Workdir))
+	if len(scaffold.Profile.ExposedPorts) > 0 {
+		output.WriteString(fmt.Sprintf("Exposed:      %s\n", strings.Join(scaffold.Profile.ExposedPorts, ", ")))
+	}
+
+	output.WriteString("\nPolicy Checklist:\n")
+	for _, item := range scaffold.PolicyChecklist {
+		output.WriteString(fmt.Sprintf("  - %s\n", item))
+	}
+
+	output.WriteString("\nGenerated Dockerfile:\n")
+	output.WriteString("─────────────────────────────────────────────────────\n")
+	output.WriteString(scaffold.Dockerfile)
+	output.WriteString("\n\n" + helpStyle.Render("b Back | q Quit"))
+	return output.String()
+}
+
+func resourceHealth(stats *forensics.ResourceStats) string {
+	if stats == nil {
+		return "unknown"
+	}
+	switch {
+	case stats.MemoryPercent >= 90 || stats.CPUPercent >= 90:
+		return "critical"
+	case stats.MemoryPercent >= 75 || stats.CPUPercent >= 75:
+		return "elevated"
+	default:
+		return "normal"
+	}
+}
+
+func largestLayerPercent(imageLayers *layers.ImageLayers) float64 {
+	if imageLayers == nil || len(imageLayers.Layers) == 0 {
+		return 0
+	}
+
+	var total int64
+	var largest int64
+	for _, layer := range imageLayers.Layers {
+		total += layer.Size
+		if layer.Size > largest {
+			largest = layer.Size
+		}
+	}
+
+	return layers.PercentageOfTotal(largest, total)
+}
+
+func sortedIntMapLines(values map[string]int) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, fmt.Sprintf("%-12s %d", key+":", values[key]))
+	}
+	return lines
+}
+
+func sortedStringMapLines(values map[string]string, limit int) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if limit > 0 && len(keys) > limit {
+		keys = keys[:limit]
+	}
+
+	lines := make([]string, 0, len(keys))
+	for _, key := range keys {
+		lines = append(lines, fmt.Sprintf("%s=%s", key, values[key]))
+	}
+	return lines
 }

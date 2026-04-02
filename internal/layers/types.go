@@ -41,6 +41,14 @@ type ImageLayers struct {
 	Layers  []Layer
 }
 
+// OptimizationReport summarizes image optimization opportunities.
+type OptimizationReport struct {
+	EstimatedSavings int64
+	LayerCount       int
+	BloatItemCount   int
+	Recommendations  []string
+}
+
 // LayerDiff represents the difference between two consecutive layers
 type LayerDiff struct {
 	FromLayer     Layer

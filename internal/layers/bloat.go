@@ -228,7 +228,37 @@ func (bd *BloatDetector) GenerateRecommendations(imageLayers *ImageLayers, bloat
 			fmt.Sprintf("Image has %d layers - consider consolidating to reduce layer count", len(imageLayers.Layers)))
 	}
 
+	if len(imageLayers.Layers) > 0 {
+		base := strings.ToLower(imageLayers.Layers[0].Command)
+		if strings.Contains(base, "ubuntu") || strings.Contains(base, "debian") {
+			recommendations = append(recommendations,
+				"Consider a smaller base image such as alpine or distroless when compatible with your runtime")
+		}
+	}
+
+	if bd.hasRepeatedPackageInstalls(imageLayers) {
+		recommendations = append(recommendations,
+			"Package installs appear in multiple layers - combine install and cleanup steps to improve cache efficiency")
+	}
+
 	return recommendations
+}
+
+// BuildOptimizationReport creates a summary for UI/reporting consumption.
+func (bd *BloatDetector) BuildOptimizationReport(imageLayers *ImageLayers, bloatByLayer map[int][]BloatItem) OptimizationReport {
+	report := OptimizationReport{
+		EstimatedSavings: bd.EstimateSavings(bloatByLayer),
+		Recommendations:  bd.GenerateRecommendations(imageLayers, bloatByLayer),
+	}
+
+	if imageLayers != nil {
+		report.LayerCount = len(imageLayers.Layers)
+	}
+	for _, items := range bloatByLayer {
+		report.BloatItemCount += len(items)
+	}
+
+	return report
 }
 
 // DetectBloatFromTarAnalysis performs bloat detection using actual tar file analysis
@@ -333,4 +363,27 @@ func (bd *BloatDetector) GenerateOptimizationRecommendationsFromAnalysis(analysi
 	}
 
 	return recommendations
+}
+
+func (bd *BloatDetector) hasRepeatedPackageInstalls(imageLayers *ImageLayers) bool {
+	if imageLayers == nil {
+		return false
+	}
+
+	packageInstallLayers := 0
+	for _, layer := range imageLayers.Layers {
+		command := strings.ToLower(layer.Command)
+		if strings.Contains(command, "apt-get install") ||
+			strings.Contains(command, "apt install") ||
+			strings.Contains(command, "yum install") ||
+			strings.Contains(command, "dnf install") ||
+			strings.Contains(command, "apk add") ||
+			strings.Contains(command, "pip install") ||
+			strings.Contains(command, "npm install") ||
+			strings.Contains(command, "npm ci") {
+			packageInstallLayers++
+		}
+	}
+
+	return packageInstallLayers > 1
 }

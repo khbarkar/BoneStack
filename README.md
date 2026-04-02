@@ -2,6 +2,8 @@
   <img src="img/logo.png" alt="VIC logo" width="717">
 </p>
 
+[![Go](https://github.com/khbarkar/BoneStack/actions/workflows/go.yml/badge.svg)](https://github.com/khbarkar/BoneStack/actions/workflows/go.yml) 
+
   <p align="center">
     <a href="https://github.com/khbarkar/VIC/tags">
       <img src="https://img.shields.io/github/v/tag/khbarkar/VIC?label=tag" alt="Latest Tag">
@@ -18,7 +20,7 @@
 
 A tool for advanced Docker image and container diagnostics, forensics, and optimization.
 
-## Features (Phases 1-3)
+## Features (Phases 1-5)
 
 ### Current Capabilities
 - **Interactive Menu System** - Navigate with arrow keys, inspired by Smitty/AIX
@@ -42,6 +44,17 @@ A tool for advanced Docker image and container diagnostics, forensics, and optim
   - Process listing
   - Volume mount inspection
   - Container log viewer
+- **Environment & Resource Views** - Dedicated forensics screens for runtime insight
+  - Environment summaries with secret redaction
+  - Resource health, memory usage, and process counts
+- **Optimization Suggestions** - Image-level heuristics for size and build-efficiency improvements
+  - Estimated removable bloat
+  - Multi-layer cache/install recommendations
+  - Base image and layer-count suggestions
+- **SDE Scaffold Generation** - Generate a starter Dockerfile and policy checklist from image metadata
+  - Runtime profile inference
+  - Best-practice Dockerfile templates
+  - Basic security and build-policy guidance
 
 ## Installation
 
@@ -89,19 +102,19 @@ go build -o bonestack ./cmd/bonestack/main.go
 - [x] Process introspection
 - [x] Volume analysis
 - [x] Log inspection
-- [ ] Dedicated environment screen
-- [ ] Dedicated resource screen
+- [x] Dedicated environment screen
+- [x] Dedicated resource screen
 
 ### Phase 4: Optimization & Suggestions
-- [ ] Bloat detection algorithms
-- [ ] Multi-stage build recommendations
-- [ ] Base image optimization suggestions
-- [ ] Cache efficiency analysis
+- [x] Bloat detection algorithms
+- [x] Multi-stage build recommendations
+- [x] Base image optimization suggestions
+- [x] Cache efficiency analysis
 
 ### Phase 5: SDE Construction
-- [ ] Template-based Dockerfile generation
-- [ ] Best-practice scaffolding
-- [ ] Security policy templates
+- [x] Template-based Dockerfile generation
+- [x] Best-practice scaffolding
+- [x] Security policy templates
 - [ ] Automated dependency optimization
 
 ### Phase 6: Advanced Features
@@ -122,6 +135,7 @@ bonestack/
 │   │   └── client.go        # Docker API wrapper
 │   ├── forensics/           # Runtime container inspection
 │   ├── layers/              # Layer analysis and bloat detection
+│   ├── sde/                 # Dockerfile and scaffold generation
 │   ├── ui/
 │   │   └── app.go           # Bubble Tea TUI application
 │   └── models/
@@ -152,18 +166,18 @@ Build an interactive, menu-driven container diagnostics tool that goes beyond si
 
 ✅ **Phase 1 Complete**: Foundation with TUI and basic inspection  
 ✅ **Phase 2 Complete**: Layer analysis and advanced image inspection  
-🚧 **Phase 3 In Progress**: Forensics screens are wired for filesystem, processes, volumes, and logs; environment/resources still need dedicated UI  
-⏱️ **Phase 4 Planned**: Optimization suggestions  
-⏱️ **Phase 5 Planned**: SDE construction  
+✅ **Phase 3 Complete**: Forensics screens now cover filesystem, processes, volumes, logs, environment, and resources  
+✅ **Phase 4 Initial Implementation**: Optimization suggestions are available from analyzed images  
+🚧 **Phase 5 In Progress**: SDE scaffold generation is available; dependency-optimization output still needs deeper project analysis  
 ⏱️ **Phase 6 Planned**: Advanced features and polish
 
 ## Next Step
 
-The immediate next milestone is UI and test polish for the Phase 3 forensics flow:
+The immediate next milestone is to deepen Phase 5 and begin Phase 6:
 
-- Add dedicated `Environment` and `Resources` screens to the TUI
-- Add targeted tests for the forensics helpers and screen rendering paths
-- Reduce placeholder output and tighten screen navigation/state handling
+- Improve generated Dockerfiles using tar-analysis/project-language signals
+- Add dependency-optimization guidance directly into scaffold output
+- Start report export and image-comparison workflows
 
 ## License
 

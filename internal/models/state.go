@@ -4,10 +4,11 @@ import (
 	"github.com/kristinb/bonestack/internal/docker"
 	"github.com/kristinb/bonestack/internal/forensics"
 	"github.com/kristinb/bonestack/internal/layers"
+	"github.com/kristinb/bonestack/internal/sde"
 )
 
 type AppState struct {
-	CurrentScreen string // "menu", "images", "containers", "image-detail", "container-detail", "layers", "layer-detail", "size-breakdown", "file-browser", "forensics-menu", "filesystem", "processes", "volumes", "logs"
+	CurrentScreen string // "menu", "images", "containers", "image-detail", "container-detail", "layers", "layer-detail", "size-breakdown", "file-browser", "optimization", "scaffold", "forensics-menu", "filesystem", "processes", "volumes", "logs", "environment", "resources"
 	SelectedImage docker.ImageSummary
 	SelectedContainer docker.ContainerSummary
 	ImageList []docker.ImageSummary
@@ -18,6 +19,8 @@ type AppState struct {
 	LayerAnalyses []layers.LayerAnalysis
 	BloatDetection map[int][]layers.BloatItem
 	LayerRecommendations []string
+	OptimizationReport layers.OptimizationReport
+	Scaffold sde.Scaffold
 	SelectedLayerIndex int
 	
 	// Tar-based analysis

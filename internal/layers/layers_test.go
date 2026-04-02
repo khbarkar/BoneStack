@@ -148,3 +148,32 @@ func TestEstimateSavings(t *testing.T) {
 		t.Errorf("EstimateSavings() = %d, want 100", savings)
 	}
 }
+
+func TestBuildOptimizationReport(t *testing.T) {
+	detector := NewBloatDetector()
+	imageLayers := &ImageLayers{
+		Layers: []Layer{
+			{Command: "FROM ubuntu:22.04"},
+			{Command: "RUN apt-get install curl"},
+			{Command: "RUN apt-get install git"},
+		},
+	}
+	bloatMap := map[int][]BloatItem{
+		1: {{Pattern: "apt_cache", Removable: true, EstimatedSize: 100}},
+		2: {{Pattern: "build_tools", Removable: false, EstimatedSize: 200}},
+	}
+
+	report := detector.BuildOptimizationReport(imageLayers, bloatMap)
+	if report.LayerCount != 3 {
+		t.Fatalf("LayerCount = %d, want 3", report.LayerCount)
+	}
+	if report.BloatItemCount != 2 {
+		t.Fatalf("BloatItemCount = %d, want 2", report.BloatItemCount)
+	}
+	if report.EstimatedSavings != 100 {
+		t.Fatalf("EstimatedSavings = %d, want 100", report.EstimatedSavings)
+	}
+	if len(report.Recommendations) == 0 {
+		t.Fatalf("expected recommendations, got none")
+	}
+}
