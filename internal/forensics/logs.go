@@ -140,7 +140,7 @@ func (la *LogAnalyzer) AnalyzeLogs(ctx context.Context, containerID string) (*Lo
 
 // GetLogsSince retrieves logs since a given time
 func (la *LogAnalyzer) GetLogsSince(ctx context.Context, containerID string, since time.Time) (string, error) {
-	sinceStr := since.Format(time.RFC3339)
+	_ = since.Format(time.RFC3339)
 	logs, err := la.inspector.GetContainerLogs(ctx, containerID, "all", false)
 	if err != nil {
 		return "", err

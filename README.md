@@ -18,7 +18,7 @@
 
 A tool for advanced Docker image and container diagnostics, forensics, and optimization.
 
-## Features (Phase 1 - Complete ✅)
+## Features (Phases 1-3)
 
 ### Current Capabilities
 - **Interactive Menu System** - Navigate with arrow keys, inspired by Smitty/AIX
@@ -33,6 +33,15 @@ A tool for advanced Docker image and container diagnostics, forensics, and optim
   - Current status and state
   - Port mappings
   - Volume mounts
+- **Layer Analysis** - Inspect image layers, size breakdowns, and bloat indicators
+  - Layer-by-layer image history
+  - Size breakdown view
+  - Layer detail and basic file/bloat analysis
+- **Container Forensics** - Inspect live container runtime data
+  - Root filesystem listing
+  - Process listing
+  - Volume mount inspection
+  - Container log viewer
 
 ## Installation
 
@@ -43,7 +52,7 @@ A tool for advanced Docker image and container diagnostics, forensics, and optim
 
 ### Build from Source
 ```bash
-cd bonestack
+cd sosmity
 go build -o bonestack ./cmd/bonestack/main.go
 ./bonestack
 ```
@@ -67,19 +76,21 @@ go build -o bonestack ./cmd/bonestack/main.go
 4. **Image Details** - Detailed view of selected image
 5. **Container Details** - Detailed view of selected container
 
-## Planned Features (Phase 2-6)
+## Roadmap
 
 ### Phase 2: Layer Analysis
-- [ ] View image layers individually
-- [ ] Layer size breakdown
-- [ ] Diff analysis between consecutive layers
-- [ ] Dockerfile instruction reconstruction
+- [x] View image layers individually
+- [x] Layer size breakdown
+- [x] Diff analysis between consecutive layers
+- [x] Dockerfile instruction reconstruction
 
 ### Phase 3: Forensics Engine
-- [ ] Container filesystem inspection
-- [ ] Process introspection (PIDs, environment variables)
-- [ ] Volume and network analysis
-- [ ] Log streaming and filtering
+- [x] Container filesystem inspection
+- [x] Process introspection
+- [x] Volume analysis
+- [x] Log inspection
+- [ ] Dedicated environment screen
+- [ ] Dedicated resource screen
 
 ### Phase 4: Optimization & Suggestions
 - [ ] Bloat detection algorithms
@@ -109,10 +120,14 @@ bonestack/
 ├── internal/
 │   ├── docker/
 │   │   └── client.go        # Docker API wrapper
+│   ├── forensics/           # Runtime container inspection
+│   ├── layers/              # Layer analysis and bloat detection
 │   ├── ui/
 │   │   └── app.go           # Bubble Tea TUI application
 │   └── models/
 │       └── state.go         # Application state models
+├── img/
+│   └── logo.png
 └── README.md
 ```
 
@@ -136,11 +151,19 @@ Build an interactive, menu-driven container diagnostics tool that goes beyond si
 ## Development Status
 
 ✅ **Phase 1 Complete**: Foundation with TUI and basic inspection  
-🚧 **Phase 2 In Progress**: Layer analysis and advanced image inspection  
-⏱️ **Phase 3 Planned**: Container forensics engine  
+✅ **Phase 2 Complete**: Layer analysis and advanced image inspection  
+🚧 **Phase 3 In Progress**: Forensics screens are wired for filesystem, processes, volumes, and logs; environment/resources still need dedicated UI  
 ⏱️ **Phase 4 Planned**: Optimization suggestions  
 ⏱️ **Phase 5 Planned**: SDE construction  
-⏱️ **Phase 6 Planned**: Advanced features and polish  
+⏱️ **Phase 6 Planned**: Advanced features and polish
+
+## Next Step
+
+The immediate next milestone is UI and test polish for the Phase 3 forensics flow:
+
+- Add dedicated `Environment` and `Resources` screens to the TUI
+- Add targeted tests for the forensics helpers and screen rendering paths
+- Reduce placeholder output and tighten screen navigation/state handling
 
 ## License
 

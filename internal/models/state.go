@@ -2,11 +2,12 @@ package models
 
 import (
 	"github.com/kristinb/bonestack/internal/docker"
+	"github.com/kristinb/bonestack/internal/forensics"
 	"github.com/kristinb/bonestack/internal/layers"
 )
 
 type AppState struct {
-	CurrentScreen string // "menu", "images", "containers", "image-detail", "container-detail", "layers", "layer-detail", "size-breakdown", "file-browser"
+	CurrentScreen string // "menu", "images", "containers", "image-detail", "container-detail", "layers", "layer-detail", "size-breakdown", "file-browser", "forensics-menu", "filesystem", "processes", "volumes", "logs"
 	SelectedImage docker.ImageSummary
 	SelectedContainer docker.ContainerSummary
 	ImageList []docker.ImageSummary
@@ -22,6 +23,20 @@ type AppState struct {
 	// Tar-based analysis
 	LayerTarData []layers.LayerTarData // Real tar file data
 	FileAnalysis []layers.FileAnalysisResult // File analysis results
+	
+	// Forensics data
+	FileSystemData map[string]interface{} // Directory contents
+	ProcessList []forensics.Process
+	ProcessStats *forensics.ProcessStats
+	VolumeData []forensics.VolumeInfo
+	ResourceStats *forensics.ResourceStats
+	LogLines []string
+	EnvironmentVars map[string]string
+	SecretVars []string
+	
+	// UI state
+	ScrollOffset int
+	FilterText string
 	
 	Error string
 }

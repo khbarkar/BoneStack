@@ -2,7 +2,6 @@ package forensics
 
 import (
 	"context"
-	"fmt"
 	"strings"
 )
 

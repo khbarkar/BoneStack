@@ -1,5 +1,6 @@
 # Binaries
 sosmity
+bonestack
 *.o
 *.a
 *.so

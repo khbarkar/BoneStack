@@ -103,6 +103,10 @@ func (c *Client) GetImageHistory(ctx context.Context, imageID string) ([]image.H
 	return history, nil
 }
 
+func (c *Client) Raw() *client.Client {
+	return c.docker
+}
+
 func (c *Client) Close() error {
 	return c.docker.Close()
 }

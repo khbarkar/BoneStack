@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/kristinb/bonestack/internal/docker"
+	"github.com/kristinb/bonestack/internal/forensics"
 	"github.com/kristinb/bonestack/internal/layers"
 	"github.com/kristinb/bonestack/internal/models"
 )
@@ -33,25 +34,40 @@ var (
 )
 
 type App struct {
-	docker        *docker.Client
-	layerAnalyzer *layers.Analyzer
-	bloatDetector *layers.BloatDetector
-	diffEngine    *layers.DiffEngine
-	state         *models.AppState
-	width         int
-	height        int
-	selectedIndex int
-	ctx           context.Context
+	docker              *docker.Client
+	layerAnalyzer       *layers.Analyzer
+	bloatDetector       *layers.BloatDetector
+	diffEngine          *layers.DiffEngine
+	containerInspector  *forensics.ContainerInspector
+	fsInspector         *forensics.FileSystemInspector
+	processAnalyzer     *forensics.ProcessAnalyzer
+	volumeAnalyzer      *forensics.VolumeAnalyzer
+	logAnalyzer         *forensics.LogAnalyzer
+	envAnalyzer         *forensics.EnvironmentAnalyzer
+	resourceMonitor     *forensics.ResourceMonitor
+	state               *models.AppState
+	width               int
+	height              int
+	selectedIndex        int
+	ctx                 context.Context
 }
 
 func NewApp(ctx context.Context, dockerClient *docker.Client) *App {
+	containerInspector := forensics.NewContainerInspector(dockerClient.Raw())
 	return &App{
-		docker:        dockerClient,
-		layerAnalyzer: layers.NewAnalyzer(dockerClient),
-		bloatDetector: layers.NewBloatDetector(),
-		diffEngine:    layers.NewDiffEngine(),
-		ctx:           ctx,
-		selectedIndex: 0,
+		docker:             dockerClient,
+		layerAnalyzer:      layers.NewAnalyzer(dockerClient),
+		bloatDetector:      layers.NewBloatDetector(),
+		diffEngine:         layers.NewDiffEngine(),
+		containerInspector: containerInspector,
+		fsInspector:        forensics.NewFileSystemInspector(containerInspector),
+		processAnalyzer:    forensics.NewProcessAnalyzer(containerInspector),
+		volumeAnalyzer:     forensics.NewVolumeAnalyzer(containerInspector),
+		logAnalyzer:        forensics.NewLogAnalyzer(containerInspector),
+		envAnalyzer:        forensics.NewEnvironmentAnalyzer(containerInspector),
+		resourceMonitor:    forensics.NewResourceMonitor(containerInspector),
+		ctx:                ctx,
+		selectedIndex:      0,
 		state: &models.AppState{
 			CurrentScreen: "menu",
 		},
@@ -109,6 +125,16 @@ func (a *App) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleSizeBreakdownKeys(msg)
 	case "file-browser":
 		return a.handleFileBrowserKeys(msg)
+	case "forensics-menu":
+		return a.handleForensicsMenuKeys(msg)
+	case "filesystem":
+		return a.handleFilesystemKeys(msg)
+	case "processes":
+		return a.handleProcessesKeys(msg)
+	case "volumes":
+		return a.handleVolumesKeys(msg)
+	case "logs":
+		return a.handleLogsKeys(msg)
 	}
 
 	return a, nil
@@ -191,6 +217,10 @@ func (a *App) handleImageDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (a *App) handleContainerDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "f":
+		// Open forensics menu
+		a.state.CurrentScreen = "forensics-menu"
+		a.selectedIndex = 0
 	case "esc", "b":
 		a.state.CurrentScreen = "containers"
 		a.selectedIndex = 0
@@ -218,6 +248,16 @@ func (a *App) View() string {
 		return a.renderSizeBreakdown()
 	case "file-browser":
 		return a.renderFileBrowser()
+	case "forensics-menu":
+		return a.renderForensicsMenu()
+	case "filesystem":
+		return a.renderFilesystem()
+	case "processes":
+		return a.renderProcesses()
+	case "volumes":
+		return a.renderVolumes()
+	case "logs":
+		return a.renderLogs()
 	default:
 		return "Unknown screen"
 	}
@@ -380,7 +420,7 @@ func (a *App) renderContainerDetail() string {
 		}
 	}
 
-	detail.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	detail.WriteString("\n" + helpStyle.Render("f Forensics | b Back | q Quit"))
 	return detail.String()
 }
 
@@ -738,4 +778,273 @@ func (a *App) renderFileBrowser() string {
 	output.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
 
 	return output.String()
+}
+
+// Forensics handlers and renderers
+
+func (a *App) handleForensicsMenuKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	menuItems := []string{"Filesystem", "Processes", "Volumes", "Logs", "Environment", "Resources"}
+
+	switch msg.String() {
+	case "up", "k":
+		a.selectedIndex = (a.selectedIndex - 1 + len(menuItems)) % len(menuItems)
+	case "down", "j":
+		a.selectedIndex = (a.selectedIndex + 1) % len(menuItems)
+	case "enter":
+		switch menuItems[a.selectedIndex] {
+		case "Filesystem":
+			a.state.CurrentScreen = "filesystem"
+		case "Processes":
+			a.state.CurrentScreen = "processes"
+		case "Volumes":
+			a.state.CurrentScreen = "volumes"
+		case "Logs":
+			a.state.CurrentScreen = "logs"
+		case "Environment":
+			// TODO: Add environment screen
+		case "Resources":
+			// TODO: Add resources screen
+		}
+		a.selectedIndex = 0
+	case "esc", "b":
+		a.state.CurrentScreen = "container-detail"
+		a.selectedIndex = 0
+	}
+	return a, nil
+}
+
+func (a *App) renderForensicsMenu() string {
+	name := strings.TrimPrefix(a.state.SelectedContainer.Names[0], "/")
+	title := titleStyle.Render(fmt.Sprintf("🔍 Forensics - %s", name))
+
+	menuItems := []string{
+		"Filesystem",
+		"Processes",
+		"Volumes",
+		"Logs",
+		"Environment",
+		"Resources",
+	}
+
+	var menu strings.Builder
+	menu.WriteString(title + "\n\n")
+
+	for i, item := range menuItems {
+		if i == a.selectedIndex {
+			menu.WriteString(selectedStyle.Render("→ " + item) + "\n")
+		} else {
+			menu.WriteString(normalStyle.Render("  " + item) + "\n")
+		}
+	}
+
+	menu.WriteString("\n" + helpStyle.Render("↑/↓ Navigate | Enter Select | b Back | q Quit"))
+	return menu.String()
+}
+
+func (a *App) handleFilesystemKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "b":
+		a.state.CurrentScreen = "forensics-menu"
+		a.selectedIndex = 0
+	}
+	return a, nil
+}
+
+func (a *App) renderFilesystem() string {
+	var fs strings.Builder
+	fs.WriteString(titleStyle.Render("📁 Filesystem") + "\n\n")
+
+	fsInspector := a.fsInspector
+	if fsInspector == nil {
+		fs.WriteString("Error: Filesystem inspector not initialized\n")
+		return fs.String()
+	}
+
+	files, err := fsInspector.ListDirectory(a.ctx, a.state.SelectedContainer.ID, "/")
+	if err != nil {
+		fs.WriteString(fmt.Sprintf("Error listing directory: %v\n", err))
+	} else {
+		fs.WriteString("Root Directory Contents:\n\n")
+		for i, file := range files {
+			if i >= 20 {
+				fs.WriteString(fmt.Sprintf("... and %d more files\n", len(files)-i))
+				break
+			}
+			kind := "file"
+			if file.IsDir {
+				kind = "dir"
+			}
+			fs.WriteString(fmt.Sprintf("  %-4s %s\n", kind, file.Path))
+		}
+	}
+
+	fs.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	return fs.String()
+}
+
+func (a *App) handleProcessesKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "b":
+		a.state.CurrentScreen = "forensics-menu"
+		a.selectedIndex = 0
+	}
+	return a, nil
+}
+
+func (a *App) renderProcesses() string {
+	var ps strings.Builder
+	ps.WriteString(titleStyle.Render("⚙️  Processes") + "\n\n")
+
+	processAnalyzer := a.processAnalyzer
+	if processAnalyzer == nil {
+		ps.WriteString("Error: Process analyzer not initialized\n")
+		return ps.String()
+	}
+
+	processes, err := processAnalyzer.ListProcesses(a.ctx, a.state.SelectedContainer.ID)
+	if err != nil {
+		ps.WriteString(fmt.Sprintf("Error listing processes: %v\n", err))
+	} else {
+		ps.WriteString(fmt.Sprintf("Total processes: %d\n\n", len(processes)))
+		ps.WriteString("PID      CMD\n")
+		ps.WriteString("────────────────────────────────────\n")
+
+		for i, proc := range processes {
+			if i >= 15 {
+				ps.WriteString(fmt.Sprintf("... and %d more processes\n", len(processes)-i))
+				break
+			}
+			ps.WriteString(fmt.Sprintf("%-8d %s\n", proc.PID, proc.Command))
+		}
+	}
+
+	ps.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	return ps.String()
+}
+
+func (a *App) handleVolumesKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "b":
+		a.state.CurrentScreen = "forensics-menu"
+		a.selectedIndex = 0
+	}
+	return a, nil
+}
+
+func (a *App) renderVolumes() string {
+	var vols strings.Builder
+	vols.WriteString(titleStyle.Render("💾 Volumes") + "\n\n")
+
+	volumeAnalyzer := a.volumeAnalyzer
+	if volumeAnalyzer == nil {
+		vols.WriteString("Error: Volume analyzer not initialized\n")
+		return vols.String()
+	}
+
+	volumes, err := volumeAnalyzer.GetMountPoints(a.ctx, a.state.SelectedContainer.ID)
+	if err != nil {
+		vols.WriteString(fmt.Sprintf("Error getting mount points: %v\n", err))
+	} else {
+		if len(volumes) == 0 {
+			vols.WriteString("No mounted volumes\n")
+		} else {
+			vols.WriteString(fmt.Sprintf("Total mounts: %d\n\n", len(volumes)))
+			vols.WriteString("Source                    Destination              Mode\n")
+			vols.WriteString("─────────────────────────────────────────────────────────────\n")
+
+			for i, vol := range volumes {
+				if i >= 12 {
+					vols.WriteString(fmt.Sprintf("... and %d more volumes\n", len(volumes)-i))
+					break
+				}
+				mode := "rw"
+				if vol.ReadOnly {
+					mode = "ro"
+				}
+				source := vol.Source
+				if len(source) > 25 {
+					source = "..." + source[len(source)-22:]
+				}
+				dest := vol.Destination
+				if len(dest) > 25 {
+					dest = "..." + dest[len(dest)-22:]
+				}
+				vols.WriteString(fmt.Sprintf("%-25s %-25s %s\n", source, dest, mode))
+			}
+		}
+	}
+
+	vols.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	return vols.String()
+}
+
+func (a *App) handleLogsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if a.state.ScrollOffset > 0 {
+			a.state.ScrollOffset--
+		}
+	case "down", "j":
+		if len(a.state.LogLines) > 20 {
+			a.state.ScrollOffset++
+		}
+	case "esc", "b":
+		a.state.CurrentScreen = "forensics-menu"
+		a.selectedIndex = 0
+		a.state.ScrollOffset = 0
+	}
+	return a, nil
+}
+
+func (a *App) renderLogs() string {
+	var logs strings.Builder
+	logs.WriteString(titleStyle.Render("📋 Container Logs") + "\n\n")
+
+	logAnalyzer := a.logAnalyzer
+	if logAnalyzer == nil {
+		logs.WriteString("Error: Log analyzer not initialized\n")
+		return logs.String()
+	}
+
+	rawLogs, err := logAnalyzer.GetLogs(a.ctx, a.state.SelectedContainer.ID, 50)
+	if err != nil {
+		logs.WriteString(fmt.Sprintf("Error getting logs: %v\n", err))
+	} else {
+		logLines := []string{}
+		if rawLogs != "" {
+			logLines = strings.Split(strings.TrimRight(rawLogs, "\n"), "\n")
+		}
+		a.state.LogLines = logLines
+
+		if len(logLines) == 0 {
+			logs.WriteString("No logs available\n")
+		} else {
+			logs.WriteString(fmt.Sprintf("Last %d log lines:\n\n", len(logLines)))
+
+			start := a.state.ScrollOffset
+			if start > len(logLines)-1 {
+				start = len(logLines) - 1
+			}
+
+			end := start + 15
+			if end > len(logLines) {
+				end = len(logLines)
+			}
+
+			for i := start; i < end; i++ {
+				line := logLines[i]
+				if len(line) > a.width-4 {
+					line = line[:a.width-7] + "..."
+				}
+				logs.WriteString(fmt.Sprintf("  %s\n", line))
+			}
+
+			if len(logLines) > 15 {
+				logs.WriteString(fmt.Sprintf("\n(Showing lines %d-%d of %d)\n", start+1, end, len(logLines)))
+			}
+		}
+	}
+
+	logs.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | b Back | q Quit"))
+	return logs.String()
 }
