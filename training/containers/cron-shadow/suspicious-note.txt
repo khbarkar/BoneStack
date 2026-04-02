@@ -1,0 +1,4 @@
+This container is intentionally suspicious-looking for training.
+It contains strings that should trigger forensic review, not execution.
+/dev/tcp/10.0.0.5/4444
+bash -i

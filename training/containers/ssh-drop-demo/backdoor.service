@@ -1,0 +1,9 @@
+[Unit]
+Description=Totally Legit Demo Service
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'echo demo service only; sleep infinity'
+
+[Install]
+WantedBy=multi-user.target

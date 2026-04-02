@@ -1,148 +1,53 @@
-#!/bin/bash
-# BoneStack Installation Script
-# Install BoneStack to /usr/local/bin for system-wide access
+#!/usr/bin/env bash
+# BoneStack installer / updater
 
-set -e
+set -euo pipefail
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+REPO_URL="https://github.com/khbarkar/BoneStack.git"
+INSTALL_DIR="$HOME/.bonestack"
+BIN_DIR="$HOME/.local/bin"
+BIN_PATH="$BIN_DIR/bonestack"
 
-# Configuration
-INSTALL_DIR="/usr/local/bin"
-BINARY_NAME="bonestack"
-FULL_PATH="$INSTALL_DIR/$BINARY_NAME"
-
-# Helper functions
-print_header() {
-    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║       BoneStack Installation          ║${NC}"
-    echo -e "${BLUE}║  Container Operations Inspector       ║${NC}"
-    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
-    echo ""
+need_cmd() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "Missing required command: $1" >&2
+    exit 1
+  fi
 }
 
-print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
-}
+echo "Installing BoneStack..."
 
-print_error() {
-    echo -e "${RED}✗ $1${NC}"
-}
+need_cmd git
+need_cmd go
 
-print_info() {
-    echo -e "${YELLOW}ℹ $1${NC}"
-}
+mkdir -p "$BIN_DIR"
 
-# Check if Go is installed
-check_go() {
-    if ! command -v go &> /dev/null; then
-        print_error "Go is not installed"
-        echo "Please install Go from https://golang.org/dl/"
-        exit 1
-    fi
-    print_success "Go is installed: $(go version)"
-}
+if [ ! -d "$INSTALL_DIR/.git" ]; then
+  git clone "$REPO_URL" "$INSTALL_DIR"
+else
+  git -C "$INSTALL_DIR" pull --ff-only
+fi
 
-# Check if script is in BoneStack directory
-check_directory() {
-    if [ ! -f "go.mod" ] || [ ! -f "cmd/bonestack/main.go" ]; then
-        print_error "Not in BoneStack directory"
-        echo "Please run this script from the BoneStack repository root"
-        exit 1
-    fi
-    print_success "Found BoneStack repository"
-}
+echo "Building BoneStack..."
+(
+  cd "$INSTALL_DIR"
+  go build -o bonestack ./cmd/bonestack/main.go
+)
 
-# Build the binary
-build_binary() {
-    print_info "Building BoneStack..."
-    if go build -v -o bonestack ./cmd/bonestack/main.go; then
-        print_success "Build completed successfully"
-    else
-        print_error "Build failed"
-        exit 1
-    fi
-}
+ln -sf "$INSTALL_DIR/bonestack" "$BIN_PATH"
 
-# Check install permissions
-check_permissions() {
-    if [ ! -w "$INSTALL_DIR" ]; then
-        print_error "No write permissions to $INSTALL_DIR"
-        print_info "You may need to use 'sudo' or have the directory writable"
-        exit 1
-    fi
-    print_success "Write permissions verified for $INSTALL_DIR"
-}
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+  echo
+  echo "Add this to your shell profile:"
+  echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+fi
 
-# Install the binary
-install_binary() {
-    print_info "Installing to $FULL_PATH..."
-    
-    # Backup existing binary if it exists
-    if [ -f "$FULL_PATH" ]; then
-        BACKUP_PATH="$FULL_PATH.backup.$(date +%s)"
-        print_info "Backing up existing binary to $BACKUP_PATH"
-        cp "$FULL_PATH" "$BACKUP_PATH"
-    fi
-    
-    # Copy new binary
-    cp bonestack "$FULL_PATH"
-    chmod +x "$FULL_PATH"
-    
-    print_success "Installed to $FULL_PATH"
-}
+VERSION="$(git -C "$INSTALL_DIR" describe --tags --always 2>/dev/null || echo unknown)"
 
-# Verify installation
-verify_installation() {
-    print_info "Verifying installation..."
-    
-    if [ ! -f "$FULL_PATH" ]; then
-        print_error "Binary not found after installation"
-        exit 1
-    fi
-    
-    if [ ! -x "$FULL_PATH" ]; then
-        print_error "Binary is not executable"
-        exit 1
-    fi
-    
-    print_success "Installation verified"
-}
-
-# Show usage
-show_usage() {
-    echo ""
-    echo "Installation Summary:"
-    echo "  Binary:    $FULL_PATH"
-    echo "  Size:      $(ls -lh $FULL_PATH | awk '{print $5}')"
-    echo "  Version:   v0.2.0 (Layer Analysis Engine)"
-    echo ""
-    echo "You can now run BoneStack from anywhere:"
-    echo ""
-    print_info "bonestack"
-    echo ""
-    echo "BoneStack is ready to use!"
-}
-
-# Main installation flow
-main() {
-    print_header
-    
-    # Run checks and installation
-    check_go
-    check_directory
-    check_permissions
-    build_binary
-    install_binary
-    verify_installation
-    show_usage
-    
-    print_success "Installation complete!"
-}
-
-# Run main function
-main
+echo
+echo "[ok] BoneStack installed"
+echo "Version: $VERSION"
+echo "Binary:  $BIN_PATH"
+echo
+echo "Run: bonestack"
+echo "Update later by rerunning this same install command."

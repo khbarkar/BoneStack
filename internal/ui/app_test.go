@@ -31,6 +31,30 @@ func TestHandleForensicsMenuKeysRoutesToEnvironmentAndResources(t *testing.T) {
 	if updated.state.CurrentScreen != "resources" {
 		t.Fatalf("expected resources screen, got %q", updated.state.CurrentScreen)
 	}
+
+	updated.state.CurrentScreen = "forensics-menu"
+	updated.selectedIndex = 6
+	model, _ = updated.handleForensicsMenuKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = model.(*App)
+	if updated.state.CurrentScreen != "container-diff" {
+		t.Fatalf("expected container-diff screen, got %q", updated.state.CurrentScreen)
+	}
+
+	updated.state.CurrentScreen = "forensics-menu"
+	updated.selectedIndex = 7
+	model, _ = updated.handleForensicsMenuKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = model.(*App)
+	if updated.state.CurrentScreen != "timeline" {
+		t.Fatalf("expected timeline screen, got %q", updated.state.CurrentScreen)
+	}
+
+	updated.state.CurrentScreen = "forensics-menu"
+	updated.selectedIndex = 8
+	model, _ = updated.handleForensicsMenuKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	updated = model.(*App)
+	if updated.state.CurrentScreen != "threat-hunt" {
+		t.Fatalf("expected threat-hunt screen, got %q", updated.state.CurrentScreen)
+	}
 }
 
 func TestRenderEnvironmentAndResourcesWithNilAnalyzers(t *testing.T) {
@@ -42,6 +66,33 @@ func TestRenderEnvironmentAndResourcesWithNilAnalyzers(t *testing.T) {
 
 	if out := app.renderResources(); !strings.Contains(out, "Resource monitor not initialized") {
 		t.Fatalf("unexpected resources render output: %q", out)
+	}
+}
+
+func TestRenderThreatHuntWithoutFindings(t *testing.T) {
+	app := &App{state: &models.AppState{CurrentScreen: "threat-hunt", AnalysisStatus: "Scanning complete."}}
+
+	out := app.renderThreatHunt()
+	if !strings.Contains(out, "No threat-hunt findings loaded") {
+		t.Fatalf("unexpected threat-hunt render output: %q", out)
+	}
+}
+
+func TestRenderContainerDiffWithoutFindings(t *testing.T) {
+	app := &App{state: &models.AppState{CurrentScreen: "container-diff", AnalysisStatus: "Diff complete."}}
+
+	out := app.renderContainerDiff()
+	if !strings.Contains(out, "No container diff changes loaded") {
+		t.Fatalf("unexpected container-diff render output: %q", out)
+	}
+}
+
+func TestRenderTimelineWithoutEvents(t *testing.T) {
+	app := &App{state: &models.AppState{CurrentScreen: "timeline", AnalysisStatus: "Timeline complete."}}
+
+	out := app.renderTimeline()
+	if !strings.Contains(out, "No timeline events loaded") {
+		t.Fatalf("unexpected timeline render output: %q", out)
 	}
 }
 
@@ -117,6 +168,63 @@ func TestLayersLoadedMsgRoutesToTargetScreen(t *testing.T) {
 	}
 }
 
+func TestThreatHuntLoadedMsgUpdatesState(t *testing.T) {
+	app := &App{state: &models.AppState{CurrentScreen: "forensics-menu"}}
+	model, _ := app.Update(threatHuntLoadedMsg{
+		findings: []map[string]string{{"category": "reverse-shell", "severity": "critical", "path": "/tmp/x.sh", "detail": "bash -i"}},
+		summary:  map[string]int{"reverse-shell": 1},
+		status:   "Threat hunt completed.",
+	})
+	updated := model.(*App)
+	if updated.state.CurrentScreen != "threat-hunt" {
+		t.Fatalf("expected threat-hunt screen, got %q", updated.state.CurrentScreen)
+	}
+	if len(updated.state.ThreatFindings) != 1 {
+		t.Fatalf("expected 1 threat finding, got %d", len(updated.state.ThreatFindings))
+	}
+	if updated.state.ThreatSummary["reverse-shell"] != 1 {
+		t.Fatalf("unexpected threat summary: %#v", updated.state.ThreatSummary)
+	}
+}
+
+func TestContainerDiffLoadedMsgUpdatesState(t *testing.T) {
+	app := &App{state: &models.AppState{CurrentScreen: "forensics-menu"}}
+	model, _ := app.Update(containerDiffLoadedMsg{
+		changes: []map[string]string{{"kind": "added", "path": "/tmp/x.sh", "suspicious": "true", "detail": "temporary payload location"}},
+		summary: map[string]int{"added": 1, "suspicious": 1},
+		status:  "Container diff loaded.",
+	})
+	updated := model.(*App)
+	if updated.state.CurrentScreen != "container-diff" {
+		t.Fatalf("expected container-diff screen, got %q", updated.state.CurrentScreen)
+	}
+	if len(updated.state.DiffChanges) != 1 {
+		t.Fatalf("expected 1 diff change, got %d", len(updated.state.DiffChanges))
+	}
+	if updated.state.DiffSummary["suspicious"] != 1 {
+		t.Fatalf("unexpected diff summary: %#v", updated.state.DiffSummary)
+	}
+}
+
+func TestTimelineLoadedMsgUpdatesState(t *testing.T) {
+	app := &App{state: &models.AppState{CurrentScreen: "forensics-menu"}}
+	model, _ := app.Update(timelineLoadedMsg{
+		events:  []map[string]string{{"time": "2026-04-02T10:00:00Z", "action": "start", "actor": "attacker-lab1", "details": "image=attacker-lab:latest"}},
+		summary: map[string]int{"start": 1},
+		status:  "Timeline loaded.",
+	})
+	updated := model.(*App)
+	if updated.state.CurrentScreen != "timeline" {
+		t.Fatalf("expected timeline screen, got %q", updated.state.CurrentScreen)
+	}
+	if len(updated.state.TimelineEvents) != 1 {
+		t.Fatalf("expected 1 timeline event, got %d", len(updated.state.TimelineEvents))
+	}
+	if updated.state.TimelineSummary["start"] != 1 {
+		t.Fatalf("unexpected timeline summary: %#v", updated.state.TimelineSummary)
+	}
+}
+
 func TestHandleScaffoldKeysBack(t *testing.T) {
 	app := &App{state: &models.AppState{CurrentScreen: "scaffold"}}
 	model, _ := app.handleScaffoldKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
@@ -182,6 +290,9 @@ func TestExportScaffoldWritesFiles(t *testing.T) {
 	if !strings.Contains(msg.message, "wrote scaffold files") {
 		t.Fatalf("unexpected export message: %q", msg.message)
 	}
+	if msg.path == "" {
+		t.Fatal("expected export path to be set")
+	}
 
 	wantFiles := []string{
 		filepath.Join(tmpDir, ".bonestack", "scaffolds", "example_latest", "Dockerfile.generated"),
@@ -191,6 +302,106 @@ func TestExportScaffoldWritesFiles(t *testing.T) {
 	for _, file := range wantFiles {
 		if _, err := os.Stat(file); err != nil {
 			t.Fatalf("expected exported file %s: %v", file, err)
+		}
+	}
+}
+
+func TestExportOptimizationReportWritesFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	defer os.Chdir(oldWd)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir failed: %v", err)
+	}
+
+	app := &App{
+		state: &models.AppState{
+			SelectedImage: docker.ImageSummary{RepoTags: []string{"example:latest"}},
+			ImageLayers: &layers.ImageLayers{
+				Layers: []layers.Layer{
+					{Size: 100, Command: "RUN apt-get install curl"},
+				},
+			},
+			BloatDetection: map[int][]layers.BloatItem{
+				0: {{Pattern: "apt_cache", Description: "cache", EstimatedSize: 10}},
+			},
+			OptimizationReport: layers.OptimizationReport{
+				EstimatedSavings: 10,
+				LayerCount:       1,
+				BloatItemCount:   1,
+				Recommendations:  []string{"Clean apt cache"},
+			},
+			FileAnalysis: []layers.FileAnalysisResult{
+				{PotentialBloat: []layers.BloatFinding{{Path: "/var/cache/apt/pkg", Type: "cache", Severity: "high", Size: 10}}},
+			},
+		},
+	}
+
+	msg := app.exportOptimizationReport()().(optimizationExportedMsg)
+	if !strings.Contains(msg.message, "wrote JSON/CSV/HTML reports") {
+		t.Fatalf("unexpected export message: %q", msg.message)
+	}
+	if msg.path == "" {
+		t.Fatal("expected export path to be set")
+	}
+
+	wantFiles := []string{
+		filepath.Join(tmpDir, ".bonestack", "reports", "example_latest", "optimization.json"),
+		filepath.Join(tmpDir, ".bonestack", "reports", "example_latest", "optimization.csv"),
+		filepath.Join(tmpDir, ".bonestack", "reports", "example_latest", "optimization.html"),
+	}
+	for _, file := range wantFiles {
+		if _, err := os.Stat(file); err != nil {
+			t.Fatalf("expected exported report %s: %v", file, err)
+		}
+	}
+}
+
+func TestExportContainerForensicsReportWritesFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	defer os.Chdir(oldWd)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir failed: %v", err)
+	}
+
+	app := &App{
+		state: &models.AppState{
+			SelectedContainer: docker.ContainerSummary{ID: "abc123", Names: []string{"/attacker-lab1"}},
+			ThreatFindings: []map[string]string{
+				{"category": "reverse-shell", "path": "/tmp/revshell.sh", "severity": "critical", "detail": "bash -i"},
+			},
+			ThreatSummary: map[string]int{"reverse-shell": 1},
+			DiffChanges: []map[string]string{
+				{"kind": "added", "path": "/root/.ssh/authorized_keys", "suspicious": "true", "detail": "SSH persistence candidate"},
+			},
+			DiffSummary: map[string]int{"added": 1, "suspicious": 1},
+			TimelineEvents: []map[string]string{
+				{"time": "2026-04-02T10:00:00Z", "action": "start", "type": "container", "actor": "attacker-lab1", "details": "image=attacker-lab:latest"},
+			},
+			TimelineSummary: map[string]int{"start": 1},
+		},
+	}
+
+	msg := app.exportContainerForensicsReport()().(optimizationExportedMsg)
+	if !strings.Contains(msg.message, "wrote container forensics reports") {
+		t.Fatalf("unexpected export message: %q", msg.message)
+	}
+
+	wantFiles := []string{
+		filepath.Join(tmpDir, ".bonestack", "reports", "attacker-lab1", "forensics.json"),
+		filepath.Join(tmpDir, ".bonestack", "reports", "attacker-lab1", "forensics.csv"),
+		filepath.Join(tmpDir, ".bonestack", "reports", "attacker-lab1", "forensics.html"),
+	}
+	for _, file := range wantFiles {
+		if _, err := os.Stat(file); err != nil {
+			t.Fatalf("expected exported report %s: %v", file, err)
 		}
 	}
 }

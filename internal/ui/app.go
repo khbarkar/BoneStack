@@ -7,56 +7,66 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/kristinb/bonestack/internal/docker"
 	"github.com/kristinb/bonestack/internal/forensics"
+	"github.com/kristinb/bonestack/internal/forensics/containerdiff"
+	"github.com/kristinb/bonestack/internal/forensics/threathunt"
+	"github.com/kristinb/bonestack/internal/forensics/timeline"
+	"github.com/kristinb/bonestack/internal/forensics/yarascan"
 	"github.com/kristinb/bonestack/internal/layers"
 	"github.com/kristinb/bonestack/internal/models"
+	"github.com/kristinb/bonestack/internal/report"
 	"github.com/kristinb/bonestack/internal/sde"
 )
 
 var (
 	titleStyle = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("33")).
-		Padding(1, 2)
+			Bold(true).
+			Foreground(lipgloss.Color("33")).
+			Padding(1, 2)
 
 	selectedStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("230")).
-		Background(lipgloss.Color("63")).
-		Padding(0, 1)
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("63")).
+			Padding(0, 1)
 
 	normalStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("250")).
-		Padding(0, 1)
+			Foreground(lipgloss.Color("250")).
+			Padding(0, 1)
 
 	helpStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
-		Italic(true)
+			Foreground(lipgloss.Color("240")).
+			Italic(true)
 )
 
 type App struct {
-	docker              *docker.Client
-	layerAnalyzer       *layers.Analyzer
-	bloatDetector       *layers.BloatDetector
-	diffEngine          *layers.DiffEngine
-	tarExtractor        *layers.TarExtractor
-	fileAnalyzer        *layers.FileAnalyzer
-	containerInspector  *forensics.ContainerInspector
-	fsInspector         *forensics.FileSystemInspector
-	processAnalyzer     *forensics.ProcessAnalyzer
-	volumeAnalyzer      *forensics.VolumeAnalyzer
-	logAnalyzer         *forensics.LogAnalyzer
-	envAnalyzer         *forensics.EnvironmentAnalyzer
-	resourceMonitor     *forensics.ResourceMonitor
-	scaffoldGenerator   *sde.Generator
-	state               *models.AppState
-	width               int
-	height              int
-	selectedIndex        int
-	ctx                 context.Context
+	docker             *docker.Client
+	layerAnalyzer      *layers.Analyzer
+	bloatDetector      *layers.BloatDetector
+	diffEngine         *layers.DiffEngine
+	tarExtractor       *layers.TarExtractor
+	fileAnalyzer       *layers.FileAnalyzer
+	containerInspector *forensics.ContainerInspector
+	fsInspector        *forensics.FileSystemInspector
+	processAnalyzer    *forensics.ProcessAnalyzer
+	volumeAnalyzer     *forensics.VolumeAnalyzer
+	logAnalyzer        *forensics.LogAnalyzer
+	envAnalyzer        *forensics.EnvironmentAnalyzer
+	resourceMonitor    *forensics.ResourceMonitor
+	diffScanner        *containerdiff.Scanner
+	timelineScanner    *timeline.Scanner
+	threatScanner      *threathunt.Scanner
+	yaraScanner        *yarascan.Scanner
+	scaffoldGenerator  *sde.Generator
+	state              *models.AppState
+	width              int
+	height             int
+	selectedIndex      int
+	ctx                context.Context
 }
 
 func NewApp(ctx context.Context, dockerClient *docker.Client) *App {
@@ -75,6 +85,10 @@ func NewApp(ctx context.Context, dockerClient *docker.Client) *App {
 		logAnalyzer:        forensics.NewLogAnalyzer(containerInspector),
 		envAnalyzer:        forensics.NewEnvironmentAnalyzer(containerInspector),
 		resourceMonitor:    forensics.NewResourceMonitor(containerInspector),
+		diffScanner:        containerdiff.NewScanner(dockerClient.Raw()),
+		timelineScanner:    timeline.NewScanner(dockerClient.Raw()),
+		threatScanner:      threathunt.NewScanner(containerInspector),
+		yaraScanner:        yarascan.NewScanner(containerInspector),
 		scaffoldGenerator:  sde.NewGenerator(),
 		ctx:                ctx,
 		selectedIndex:      0,
@@ -110,6 +124,31 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.state.SelectedLayerIndex = 0
 	case scaffoldExportedMsg:
 		a.state.ExportMessage = msg.message
+		a.state.LastExportPath = msg.path
+	case optimizationExportedMsg:
+		a.state.ExportMessage = msg.message
+		a.state.LastExportPath = msg.path
+	case threatHuntLoadedMsg:
+		a.state.ThreatFindings = msg.findings
+		a.state.ThreatSummary = msg.summary
+		a.state.AnalysisStatus = msg.status
+		a.state.AnalysisError = msg.err
+		a.state.CurrentScreen = "threat-hunt"
+		a.state.ScrollOffset = 0
+	case containerDiffLoadedMsg:
+		a.state.DiffChanges = msg.changes
+		a.state.DiffSummary = msg.summary
+		a.state.AnalysisStatus = msg.status
+		a.state.AnalysisError = msg.err
+		a.state.CurrentScreen = "container-diff"
+		a.state.ScrollOffset = 0
+	case timelineLoadedMsg:
+		a.state.TimelineEvents = msg.events
+		a.state.TimelineSummary = msg.summary
+		a.state.AnalysisStatus = msg.status
+		a.state.AnalysisError = msg.err
+		a.state.CurrentScreen = "timeline"
+		a.state.ScrollOffset = 0
 	}
 	return a, nil
 }
@@ -157,6 +196,12 @@ func (a *App) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleEnvironmentKeys(msg)
 	case "resources":
 		return a.handleResourcesKeys(msg)
+	case "container-diff":
+		return a.handleContainerDiffKeys(msg)
+	case "timeline":
+		return a.handleTimelineKeys(msg)
+	case "threat-hunt":
+		return a.handleThreatHuntKeys(msg)
 	}
 
 	return a, nil
@@ -164,7 +209,7 @@ func (a *App) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (a *App) handleMenuKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	menuItems := []string{"View Images", "View Containers", "Exit"}
-	
+
 	switch msg.String() {
 	case "up", "k":
 		a.selectedIndex = (a.selectedIndex - 1 + len(menuItems)) % len(menuItems)
@@ -232,6 +277,7 @@ func (a *App) handleImageDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.state.AnalysisStatus = "Preparing image layer analysis..."
 		a.state.AnalysisError = ""
 		a.state.ExportMessage = ""
+		a.state.LastExportPath = ""
 		return a, a.loadLayersFor("layers")
 	case "g":
 		if a.state.ImageLayers == nil {
@@ -239,8 +285,11 @@ func (a *App) handleImageDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.state.AnalysisStatus = "Preparing image and tar analysis for scaffold generation..."
 			a.state.AnalysisError = ""
 			a.state.ExportMessage = ""
+			a.state.LastExportPath = ""
 			return a, a.loadLayersFor("scaffold")
 		}
+		a.state.ExportMessage = ""
+		a.state.LastExportPath = ""
 		a.state.CurrentScreen = "scaffold"
 	case "o":
 		if a.state.ImageLayers == nil {
@@ -248,8 +297,11 @@ func (a *App) handleImageDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.state.AnalysisStatus = "Preparing optimization analysis..."
 			a.state.AnalysisError = ""
 			a.state.ExportMessage = ""
+			a.state.LastExportPath = ""
 			return a, a.loadLayersFor("optimization")
 		}
+		a.state.ExportMessage = ""
+		a.state.LastExportPath = ""
 		a.state.CurrentScreen = "optimization"
 	case "esc", "b":
 		a.state.CurrentScreen = "images"
@@ -309,6 +361,12 @@ func (a *App) View() string {
 		return a.renderEnvironment()
 	case "resources":
 		return a.renderResources()
+	case "container-diff":
+		return a.renderContainerDiff()
+	case "timeline":
+		return a.renderTimeline()
+	case "threat-hunt":
+		return a.renderThreatHunt()
 	default:
 		return "Unknown screen"
 	}
@@ -316,7 +374,7 @@ func (a *App) View() string {
 
 func (a *App) renderMenu() string {
 	title := titleStyle.Render("🐳 BoneStack - Container Operations Inspector")
-	
+
 	menuItems := []string{
 		"View Images",
 		"View Containers",
@@ -326,12 +384,12 @@ func (a *App) renderMenu() string {
 	var menu strings.Builder
 	menu.WriteString(title + "\n\n")
 	menu.WriteString("Main Menu\n\n")
-	
+
 	for i, item := range menuItems {
 		if i == a.selectedIndex {
-			menu.WriteString(selectedStyle.Render("→ " + item) + "\n")
+			menu.WriteString(selectedStyle.Render("→ "+item) + "\n")
 		} else {
-			menu.WriteString(normalStyle.Render("  " + item) + "\n")
+			menu.WriteString(normalStyle.Render("  "+item) + "\n")
 		}
 	}
 
@@ -341,7 +399,7 @@ func (a *App) renderMenu() string {
 
 func (a *App) renderImageList() string {
 	title := titleStyle.Render("🖼️  Docker Images")
-	
+
 	var list strings.Builder
 	list.WriteString(title + "\n\n")
 
@@ -355,14 +413,14 @@ func (a *App) renderImageList() string {
 			} else {
 				name = safeSlice(img.ID, 12)
 			}
-			
+
 			size := fmt.Sprintf("%.2f MB", float64(img.Size)/1024/1024)
 			line := fmt.Sprintf("%-40s %s", name, size)
-			
+
 			if i == a.selectedIndex {
-				list.WriteString(selectedStyle.Render("→ " + line) + "\n")
+				list.WriteString(selectedStyle.Render("→ "+line) + "\n")
 			} else {
-				list.WriteString(normalStyle.Render("  " + line) + "\n")
+				list.WriteString(normalStyle.Render("  "+line) + "\n")
 			}
 		}
 	}
@@ -373,7 +431,7 @@ func (a *App) renderImageList() string {
 
 func (a *App) renderContainerList() string {
 	title := titleStyle.Render("📦 Docker Containers")
-	
+
 	var list strings.Builder
 	list.WriteString(title + "\n\n")
 
@@ -384,11 +442,11 @@ func (a *App) renderContainerList() string {
 			name := strings.TrimPrefix(container.Names[0], "/")
 			status := container.Status
 			line := fmt.Sprintf("%-30s %s", name, status)
-			
+
 			if i == a.selectedIndex {
-				list.WriteString(selectedStyle.Render("→ " + line) + "\n")
+				list.WriteString(selectedStyle.Render("→ "+line) + "\n")
 			} else {
-				list.WriteString(normalStyle.Render("  " + line) + "\n")
+				list.WriteString(normalStyle.Render("  "+line) + "\n")
 			}
 		}
 	}
@@ -417,11 +475,11 @@ func (a *App) renderImageDetail() string {
 	detail.WriteString(fmt.Sprintf("Created:   %d\n", a.state.SelectedImage.Created))
 	detail.WriteString(fmt.Sprintf("OS:        %s\n", inspect.Os))
 	detail.WriteString(fmt.Sprintf("Arch:      %s\n", inspect.Architecture))
-	
+
 	if histErr == nil && len(history) > 0 {
 		detail.WriteString(fmt.Sprintf("Layers:    %d\n", len(history)))
 	}
-	
+
 	if len(inspect.Config.ExposedPorts) > 0 {
 		detail.WriteString("\nExposed Ports:\n")
 		for port := range inspect.Config.ExposedPorts {
@@ -436,7 +494,7 @@ func (a *App) renderImageDetail() string {
 		}
 	}
 
-	detail.WriteString("\n" + helpStyle.Render("l Layers | b Back | q Quit"))
+	detail.WriteString("\n" + helpStyle.Render("l Layers | o Optimize | g Generate Dockerfile | b Back | q Quit"))
 	return detail.String()
 }
 
@@ -471,7 +529,7 @@ func (a *App) renderContainerDetail() string {
 		}
 	}
 
-	detail.WriteString("\n" + helpStyle.Render("f Forensics | o Optimize | g Generate Dockerfile | b Back | q Quit"))
+	detail.WriteString("\n" + helpStyle.Render("f Forensics | b Back | q Quit"))
 	return detail.String()
 }
 
@@ -531,6 +589,8 @@ func (a *App) handleFileBrowserKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (a *App) handleOptimizationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "w":
+		return a, a.exportOptimizationReport()
 	case "esc", "b":
 		a.state.CurrentScreen = "image-detail"
 	}
@@ -568,14 +628,14 @@ func (a *App) renderLayers() string {
 	for i, layer := range a.state.ImageLayers.Layers {
 		pct := layers.PercentageOfTotal(layer.Size, totalSize)
 		sizeStr := layers.SizeFormatter(layer.Size)
-		
+
 		line := fmt.Sprintf("[%d] %8s (%.1f%%) │ %s",
 			i, sizeStr, pct, layer.Command[:minInt(50, len(layer.Command))])
 
 		if i == a.state.SelectedLayerIndex {
-			output.WriteString(selectedStyle.Render("→ " + line) + "\n")
+			output.WriteString(selectedStyle.Render("→ "+line) + "\n")
 		} else {
-			output.WriteString(normalStyle.Render("  " + line) + "\n")
+			output.WriteString(normalStyle.Render("  "+line) + "\n")
 		}
 	}
 
@@ -635,11 +695,11 @@ func (a *App) renderSizeBreakdown() string {
 
 	// Calculate cumulative sizes
 	type layerInfo struct {
-		index    int
-		size     int64
-		cumSize  int64
-		pct      float64
-		command  string
+		index   int
+		size    int64
+		cumSize int64
+		pct     float64
+		command string
 	}
 
 	var infos []layerInfo
@@ -808,6 +868,142 @@ func (a *App) loadContainers() tea.Cmd {
 	}
 }
 
+func (a *App) loadThreatHunt() tea.Cmd {
+	return func() tea.Msg {
+		if a.threatScanner == nil {
+			return threatHuntLoadedMsg{
+				status: "Threat hunt unavailable.",
+				err:    "threat scanner not initialized",
+			}
+		}
+
+		result, err := a.threatScanner.HuntLive(a.ctx, a.state.SelectedContainer.ID)
+		if err != nil {
+			return threatHuntLoadedMsg{
+				status: "Threat hunt failed.",
+				err:    err.Error(),
+			}
+		}
+
+		findings := make([]map[string]string, 0, len(result.Findings))
+		for _, finding := range result.Findings {
+			findings = append(findings, map[string]string{
+				"category": finding.Category,
+				"path":     finding.Path,
+				"severity": finding.Severity,
+				"detail":   finding.Detail,
+			})
+		}
+
+		status := fmt.Sprintf("Threat hunt completed. %d findings across %d categories.", len(result.Findings), len(result.Summary))
+		summary := result.Summary
+		if a.yaraScanner != nil {
+			yaraFindings, yaraErr := a.yaraScanner.ScanLive(a.ctx, a.state.SelectedContainer.ID)
+			switch {
+			case yaraErr == nil:
+				for _, finding := range yaraFindings {
+					category := "yara:" + finding.Rule
+					findings = append(findings, map[string]string{
+						"category": category,
+						"path":     finding.Path,
+						"severity": finding.Severity,
+						"detail":   finding.Detail,
+					})
+					summary[category]++
+				}
+				if len(yaraFindings) > 0 {
+					status = fmt.Sprintf("%s YARA matched %d files.", status, len(yaraFindings))
+				} else {
+					status = status + " YARA found no additional matches."
+				}
+			case yaraErr == yarascan.ErrYARANotInstalled:
+				status = status + " YARA unavailable on host."
+			default:
+				status = status + " YARA scan failed: " + yaraErr.Error()
+			}
+		}
+
+		return threatHuntLoadedMsg{
+			findings: findings,
+			summary:  summary,
+			status:   status,
+		}
+	}
+}
+
+func (a *App) loadContainerDiff() tea.Cmd {
+	return func() tea.Msg {
+		if a.diffScanner == nil {
+			return containerDiffLoadedMsg{
+				status: "Container diff unavailable.",
+				err:    "container diff scanner not initialized",
+			}
+		}
+
+		result, err := a.diffScanner.Diff(a.ctx, a.state.SelectedContainer.ID)
+		if err != nil {
+			return containerDiffLoadedMsg{
+				status: "Container diff failed.",
+				err:    err.Error(),
+			}
+		}
+
+		changes := make([]map[string]string, 0, len(result.Changes))
+		for _, change := range result.Changes {
+			changes = append(changes, map[string]string{
+				"path":       change.Path,
+				"kind":       change.Kind,
+				"suspicious": fmt.Sprintf("%t", change.Suspicious),
+				"detail":     change.Detail,
+			})
+		}
+
+		status := fmt.Sprintf("Container diff loaded. %d filesystem changes.", len(result.Changes))
+		return containerDiffLoadedMsg{
+			changes: changes,
+			summary: result.Summary,
+			status:  status,
+		}
+	}
+}
+
+func (a *App) loadTimeline() tea.Cmd {
+	return func() tea.Msg {
+		if a.timelineScanner == nil {
+			return timelineLoadedMsg{
+				status: "Timeline unavailable.",
+				err:    "timeline scanner not initialized",
+			}
+		}
+
+		result, err := a.timelineScanner.RecentContainerEvents(a.ctx, a.state.SelectedContainer.ID, time.Hour)
+		if err != nil {
+			return timelineLoadedMsg{
+				status: "Timeline load failed.",
+				err:    err.Error(),
+			}
+		}
+
+		events := make([]map[string]string, 0, len(result.Events))
+		for _, event := range result.Events {
+			events = append(events, map[string]string{
+				"time":    event.Time,
+				"action":  event.Action,
+				"type":    event.Type,
+				"actor":   event.Actor,
+				"details": event.Details,
+			})
+		}
+
+		status := fmt.Sprintf("Timeline loaded. %d recent events.", len(result.Events))
+		return timelineLoadedMsg{
+			events:  events,
+			summary: result.Summary,
+			status:  status,
+		}
+	}
+}
+
 type imagesLoadedMsg []docker.ImageSummary
 type containersLoadedMsg []docker.ContainerSummary
 
@@ -823,6 +1019,33 @@ type layersLoadedMsg struct {
 
 type scaffoldExportedMsg struct {
 	message string
+	path    string
+}
+
+type optimizationExportedMsg struct {
+	message string
+	path    string
+}
+
+type threatHuntLoadedMsg struct {
+	findings []map[string]string
+	summary  map[string]int
+	status   string
+	err      string
+}
+
+type containerDiffLoadedMsg struct {
+	changes []map[string]string
+	summary map[string]int
+	status  string
+	err     string
+}
+
+type timelineLoadedMsg struct {
+	events  []map[string]string
+	summary map[string]int
+	status  string
+	err     string
 }
 
 // renderFileBrowser displays file information for a layer
@@ -898,7 +1121,7 @@ func (a *App) renderFileBrowser() string {
 // Forensics handlers and renderers
 
 func (a *App) handleForensicsMenuKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	menuItems := []string{"Filesystem", "Processes", "Volumes", "Logs", "Environment", "Resources"}
+	menuItems := []string{"Filesystem", "Processes", "Volumes", "Logs", "Environment", "Resources", "Container Diff", "Timeline", "Threat Hunt"}
 
 	switch msg.String() {
 	case "up", "k":
@@ -919,6 +1142,27 @@ func (a *App) handleForensicsMenuKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.state.CurrentScreen = "environment"
 		case "Resources":
 			a.state.CurrentScreen = "resources"
+		case "Container Diff":
+			a.state.CurrentScreen = "container-diff"
+			a.state.AnalysisStatus = "Loading container filesystem changes..."
+			a.state.AnalysisError = ""
+			a.state.ExportMessage = ""
+			a.state.LastExportPath = ""
+			return a, a.loadContainerDiff()
+		case "Timeline":
+			a.state.CurrentScreen = "timeline"
+			a.state.AnalysisStatus = "Loading recent Docker events..."
+			a.state.AnalysisError = ""
+			a.state.ExportMessage = ""
+			a.state.LastExportPath = ""
+			return a, a.loadTimeline()
+		case "Threat Hunt":
+			a.state.CurrentScreen = "threat-hunt"
+			a.state.AnalysisStatus = "Scanning container for persistence and shell IOCs..."
+			a.state.AnalysisError = ""
+			a.state.ExportMessage = ""
+			a.state.LastExportPath = ""
+			return a, a.loadThreatHunt()
 		}
 		a.selectedIndex = 0
 	case "esc", "b":
@@ -939,6 +1183,9 @@ func (a *App) renderForensicsMenu() string {
 		"Logs",
 		"Environment",
 		"Resources",
+		"Container Diff",
+		"Timeline",
+		"Threat Hunt",
 	}
 
 	var menu strings.Builder
@@ -946,9 +1193,9 @@ func (a *App) renderForensicsMenu() string {
 
 	for i, item := range menuItems {
 		if i == a.selectedIndex {
-			menu.WriteString(selectedStyle.Render("→ " + item) + "\n")
+			menu.WriteString(selectedStyle.Render("→ "+item) + "\n")
 		} else {
-			menu.WriteString(normalStyle.Render("  " + item) + "\n")
+			menu.WriteString(normalStyle.Render("  "+item) + "\n")
 		}
 	}
 
@@ -1259,6 +1506,72 @@ func (a *App) handleResourcesKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+func (a *App) handleContainerDiffKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if a.state.ScrollOffset > 0 {
+			a.state.ScrollOffset--
+		}
+	case "down", "j":
+		a.state.ScrollOffset++
+	case "r":
+		a.state.AnalysisStatus = "Loading container filesystem changes..."
+		a.state.AnalysisError = ""
+		return a, a.loadContainerDiff()
+	case "w":
+		return a, a.exportContainerForensicsReport()
+	case "esc", "b":
+		a.state.CurrentScreen = "forensics-menu"
+		a.selectedIndex = 0
+		a.state.ScrollOffset = 0
+	}
+	return a, nil
+}
+
+func (a *App) handleTimelineKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if a.state.ScrollOffset > 0 {
+			a.state.ScrollOffset--
+		}
+	case "down", "j":
+		a.state.ScrollOffset++
+	case "r":
+		a.state.AnalysisStatus = "Loading recent Docker events..."
+		a.state.AnalysisError = ""
+		return a, a.loadTimeline()
+	case "w":
+		return a, a.exportContainerForensicsReport()
+	case "esc", "b":
+		a.state.CurrentScreen = "forensics-menu"
+		a.selectedIndex = 0
+		a.state.ScrollOffset = 0
+	}
+	return a, nil
+}
+
+func (a *App) handleThreatHuntKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if a.state.ScrollOffset > 0 {
+			a.state.ScrollOffset--
+		}
+	case "down", "j":
+		a.state.ScrollOffset++
+	case "r":
+		a.state.AnalysisStatus = "Scanning container for persistence and shell IOCs..."
+		a.state.AnalysisError = ""
+		return a, a.loadThreatHunt()
+	case "w":
+		return a, a.exportContainerForensicsReport()
+	case "esc", "b":
+		a.state.CurrentScreen = "forensics-menu"
+		a.selectedIndex = 0
+		a.state.ScrollOffset = 0
+	}
+	return a, nil
+}
+
 func (a *App) renderResources() string {
 	var res strings.Builder
 	res.WriteString(titleStyle.Render("📈 Resources") + "\n\n")
@@ -1292,6 +1605,193 @@ func (a *App) renderResources() string {
 	return res.String()
 }
 
+func (a *App) renderContainerDiff() string {
+	var out strings.Builder
+	out.WriteString(titleStyle.Render("🧬 Container Diff") + "\n\n")
+
+	if a.state.AnalysisStatus != "" {
+		out.WriteString("Status: " + a.state.AnalysisStatus + "\n")
+	}
+	if a.state.AnalysisError != "" {
+		out.WriteString("Error:  " + a.state.AnalysisError + "\n\n")
+		out.WriteString(helpStyle.Render("r Retry | b Back | q Quit"))
+		return out.String()
+	}
+	if a.state.ExportMessage != "" {
+		out.WriteString("Export: " + a.state.ExportMessage + "\n")
+	}
+
+	if len(a.state.DiffSummary) > 0 {
+		out.WriteString("\nSummary:\n")
+		for _, line := range sortedIntMapLines(a.state.DiffSummary) {
+			out.WriteString("  " + line + "\n")
+		}
+	}
+
+	if len(a.state.DiffChanges) == 0 {
+		out.WriteString("\nNo container diff changes loaded.\n\n")
+		out.WriteString(helpStyle.Render("r Reload | b Back | q Quit"))
+		return out.String()
+	}
+
+	out.WriteString("\nChanges:\n")
+	start := a.state.ScrollOffset
+	if start < 0 {
+		start = 0
+	}
+	if start > len(a.state.DiffChanges)-1 && len(a.state.DiffChanges) > 0 {
+		start = len(a.state.DiffChanges) - 1
+	}
+
+	visibleRows := 10
+	if a.height > 16 {
+		visibleRows = a.height - 12
+	}
+	end := start + visibleRows
+	if end > len(a.state.DiffChanges) {
+		end = len(a.state.DiffChanges)
+	}
+
+	for i := start; i < end; i++ {
+		change := a.state.DiffChanges[i]
+		flag := " "
+		if change["suspicious"] == "true" {
+			flag = "!"
+		}
+		out.WriteString(fmt.Sprintf("  [%s] %s %s\n", strings.ToUpper(change["kind"]), flag, change["path"]))
+		out.WriteString(fmt.Sprintf("      %s\n", change["detail"]))
+	}
+
+	if len(a.state.DiffChanges) > visibleRows {
+		out.WriteString(fmt.Sprintf("\n(Showing changes %d-%d of %d)\n", start+1, end, len(a.state.DiffChanges)))
+	}
+
+	out.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | r Reload | w Write Report | b Back | q Quit"))
+	return out.String()
+}
+
+func (a *App) renderTimeline() string {
+	var out strings.Builder
+	out.WriteString(titleStyle.Render("🕒 Timeline") + "\n\n")
+
+	if a.state.AnalysisStatus != "" {
+		out.WriteString("Status: " + a.state.AnalysisStatus + "\n")
+	}
+	if a.state.AnalysisError != "" {
+		out.WriteString("Error:  " + a.state.AnalysisError + "\n\n")
+		out.WriteString(helpStyle.Render("r Retry | b Back | q Quit"))
+		return out.String()
+	}
+	if a.state.ExportMessage != "" {
+		out.WriteString("Export: " + a.state.ExportMessage + "\n")
+	}
+
+	if len(a.state.TimelineSummary) > 0 {
+		out.WriteString("\nSummary:\n")
+		for _, line := range sortedIntMapLines(a.state.TimelineSummary) {
+			out.WriteString("  " + line + "\n")
+		}
+	}
+
+	if len(a.state.TimelineEvents) == 0 {
+		out.WriteString("\nNo timeline events loaded.\n\n")
+		out.WriteString(helpStyle.Render("r Reload | w Write Report | b Back | q Quit"))
+		return out.String()
+	}
+
+	out.WriteString("\nEvents:\n")
+	start := a.state.ScrollOffset
+	if start < 0 {
+		start = 0
+	}
+	if start > len(a.state.TimelineEvents)-1 && len(a.state.TimelineEvents) > 0 {
+		start = len(a.state.TimelineEvents) - 1
+	}
+	visibleRows := 10
+	if a.height > 16 {
+		visibleRows = a.height - 12
+	}
+	end := start + visibleRows
+	if end > len(a.state.TimelineEvents) {
+		end = len(a.state.TimelineEvents)
+	}
+	for i := start; i < end; i++ {
+		event := a.state.TimelineEvents[i]
+		out.WriteString(fmt.Sprintf("  %s  %s\n", event["time"], event["action"]))
+		out.WriteString(fmt.Sprintf("      %s\n", event["actor"]))
+		if event["details"] != "" {
+			out.WriteString(fmt.Sprintf("      %s\n", event["details"]))
+		}
+	}
+	if len(a.state.TimelineEvents) > visibleRows {
+		out.WriteString(fmt.Sprintf("\n(Showing events %d-%d of %d)\n", start+1, end, len(a.state.TimelineEvents)))
+	}
+	out.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | r Reload | w Write Report | b Back | q Quit"))
+	return out.String()
+}
+
+func (a *App) renderThreatHunt() string {
+	var out strings.Builder
+	out.WriteString(titleStyle.Render("🎯 Threat Hunt") + "\n\n")
+
+	if a.state.AnalysisStatus != "" {
+		out.WriteString("Status: " + a.state.AnalysisStatus + "\n")
+	}
+	if a.state.AnalysisError != "" {
+		out.WriteString("Error:  " + a.state.AnalysisError + "\n\n")
+		out.WriteString(helpStyle.Render("r Retry | b Back | q Quit"))
+		return out.String()
+	}
+	if a.state.ExportMessage != "" {
+		out.WriteString("Export: " + a.state.ExportMessage + "\n")
+	}
+
+	if len(a.state.ThreatSummary) > 0 {
+		out.WriteString("\nSummary:\n")
+		for _, line := range sortedIntMapLines(a.state.ThreatSummary) {
+			out.WriteString("  " + line + "\n")
+		}
+	}
+
+	if len(a.state.ThreatFindings) == 0 {
+		out.WriteString("\nNo threat-hunt findings loaded.\n\n")
+		out.WriteString(helpStyle.Render("r Rescan | w Write Report | b Back | q Quit"))
+		return out.String()
+	}
+
+	out.WriteString("\nFindings:\n")
+	start := a.state.ScrollOffset
+	if start < 0 {
+		start = 0
+	}
+	if start > len(a.state.ThreatFindings)-1 && len(a.state.ThreatFindings) > 0 {
+		start = len(a.state.ThreatFindings) - 1
+	}
+
+	visibleRows := 8
+	if a.height > 14 {
+		visibleRows = a.height - 12
+	}
+	end := start + visibleRows
+	if end > len(a.state.ThreatFindings) {
+		end = len(a.state.ThreatFindings)
+	}
+
+	for i := start; i < end; i++ {
+		finding := a.state.ThreatFindings[i]
+		out.WriteString(fmt.Sprintf("  [%s] %s\n", strings.ToUpper(finding["severity"]), finding["category"]))
+		out.WriteString(fmt.Sprintf("      %s\n", finding["path"]))
+		out.WriteString(fmt.Sprintf("      %s\n", finding["detail"]))
+	}
+
+	if len(a.state.ThreatFindings) > visibleRows {
+		out.WriteString(fmt.Sprintf("\n(Showing findings %d-%d of %d)\n", start+1, end, len(a.state.ThreatFindings)))
+	}
+
+	out.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | r Rescan | w Write Report | b Back | q Quit"))
+	return out.String()
+}
+
 func (a *App) renderOptimization() string {
 	var output strings.Builder
 	output.WriteString(titleStyle.Render("⚡ Optimization Suggestions") + "\n\n")
@@ -1323,6 +1823,9 @@ func (a *App) renderOptimization() string {
 	if a.state.AnalysisError != "" {
 		output.WriteString(fmt.Sprintf("Tar Analysis Error: %s\n", a.state.AnalysisError))
 	}
+	if a.state.ExportMessage != "" {
+		output.WriteString(fmt.Sprintf("Export:             %s\n", a.state.ExportMessage))
+	}
 
 	output.WriteString("\nRecommendations:\n")
 	if len(report.Recommendations) == 0 {
@@ -1341,7 +1844,7 @@ func (a *App) renderOptimization() string {
 		}
 	}
 
-	output.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	output.WriteString("\n" + helpStyle.Render("w Write Report | b Back | q Quit"))
 	return output.String()
 }
 
@@ -1456,7 +1959,49 @@ func (a *App) exportScaffold() tea.Cmd {
 			}
 		}
 
-		return scaffoldExportedMsg{message: "wrote scaffold files to " + exportDir}
+		return scaffoldExportedMsg{message: "wrote scaffold files to " + exportDir, path: exportDir}
+	}
+}
+
+func (a *App) exportOptimizationReport() tea.Cmd {
+	return func() tea.Msg {
+		if a.state.ImageLayers == nil {
+			return optimizationExportedMsg{message: "load image analysis before exporting"}
+		}
+
+		imageName := safeSlice(a.state.SelectedImage.ID, 12)
+		if len(a.state.SelectedImage.RepoTags) > 0 {
+			imageName = a.state.SelectedImage.RepoTags[0]
+		}
+
+		exportDir, err := report.ExportOptimizationReport(".", imageName, a.state.OptimizationReport, a.state.ImageLayers, a.state.BloatDetection, a.state.FileAnalysis)
+		if err != nil {
+			return optimizationExportedMsg{message: "report export failed: " + err.Error()}
+		}
+
+		return optimizationExportedMsg{
+			message: "wrote JSON/CSV/HTML reports to " + exportDir,
+			path:    exportDir,
+		}
+	}
+}
+
+func (a *App) exportContainerForensicsReport() tea.Cmd {
+	return func() tea.Msg {
+		containerName := safeSlice(a.state.SelectedContainer.ID, 12)
+		if len(a.state.SelectedContainer.Names) > 0 {
+			containerName = strings.TrimPrefix(a.state.SelectedContainer.Names[0], "/")
+		}
+
+		exportDir, err := report.ExportContainerForensicsReport(".", containerName, a.state.ThreatFindings, a.state.ThreatSummary, a.state.DiffChanges, a.state.DiffSummary, a.state.TimelineEvents, a.state.TimelineSummary)
+		if err != nil {
+			return optimizationExportedMsg{message: "report export failed: " + err.Error()}
+		}
+
+		return optimizationExportedMsg{
+			message: "wrote container forensics reports to " + exportDir,
+			path:    exportDir,
+		}
 	}
 }
 
