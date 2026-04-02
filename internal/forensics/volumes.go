@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
-	"github.com/docker/docker/api/types"
 )
 
 // VolumeAnalyzer analyzes container volumes and mounts
@@ -54,7 +52,7 @@ func (va *VolumeAnalyzer) GetMountPoints(ctx context.Context, containerID string
 			Source:      mount.Source,
 			Destination: mount.Destination,
 			ReadOnly:    mount.RW == false,
-			Type:        mount.Type,
+			Type:        string(mount.Type),
 		}
 
 		// Try to determine driver for named volumes
