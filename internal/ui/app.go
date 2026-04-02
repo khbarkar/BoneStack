@@ -107,6 +107,8 @@ func (a *App) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleLayerDetailKeys(msg)
 	case "size-breakdown":
 		return a.handleSizeBreakdownKeys(msg)
+	case "file-browser":
+		return a.handleFileBrowserKeys(msg)
 	}
 
 	return a, nil
@@ -214,6 +216,8 @@ func (a *App) View() string {
 		return a.renderLayerDetail()
 	case "size-breakdown":
 		return a.renderSizeBreakdown()
+	case "file-browser":
+		return a.renderFileBrowser()
 	default:
 		return "Unknown screen"
 	}
@@ -406,6 +410,9 @@ func (a *App) handleLayerDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "b":
 		a.state.CurrentScreen = "layers"
+	case "f":
+		// Browse files in this layer
+		a.state.CurrentScreen = "file-browser"
 	}
 	return a, nil
 }
@@ -414,6 +421,14 @@ func (a *App) handleSizeBreakdownKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "b":
 		a.state.CurrentScreen = "layers"
+	}
+	return a, nil
+}
+
+func (a *App) handleFileBrowserKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "b":
+		a.state.CurrentScreen = "layer-detail"
 	}
 	return a, nil
 }
@@ -653,4 +668,74 @@ type layersLoadedMsg struct {
 	analyses        []layers.LayerAnalysis
 	bloat           map[int][]layers.BloatItem
 	recommendations []string
+}
+
+// renderFileBrowser displays file information for a layer
+func (a *App) renderFileBrowser() string {
+	if a.state.SelectedLayerIndex >= len(a.state.ImageLayers.Layers) {
+		return titleStyle.Render("📁 File Browser") + "\n\nNo layer selected.\n\n" + helpStyle.Render("b Back | q Quit")
+	}
+
+	layer := a.state.ImageLayers.Layers[a.state.SelectedLayerIndex]
+
+	var output strings.Builder
+	output.WriteString(titleStyle.Render("📁 File Browser") + "\n\n")
+	output.WriteString(fmt.Sprintf("Layer: %s\n", safeSlice(layer.ID, 12)))
+	output.WriteString(fmt.Sprintf("Command: %s\n", layer.Command))
+	output.WriteString(fmt.Sprintf("Size: %.2f MB\n\n", float64(layer.Size)/1024/1024))
+
+	analysis := a.state.LayerAnalyses[a.state.SelectedLayerIndex]
+
+	output.WriteString("📊 Layer Analysis:\n\n")
+
+	// Show file stats
+	output.WriteString(fmt.Sprintf("  Files Added: %d\n", analysis.FilesAdded))
+	output.WriteString(fmt.Sprintf("  Directories Added: %d\n", analysis.DirsAdded))
+	output.WriteString(fmt.Sprintf("  Confidence: %.0f%%\n\n", analysis.ConfidenceScore*100))
+
+	// Show large files
+	if len(analysis.LargeFiles) > 0 {
+		output.WriteString("📦 Large Files:\n")
+		for i, file := range analysis.LargeFiles {
+			if i >= 10 {
+				output.WriteString(fmt.Sprintf("   ... and %d more\n", len(analysis.LargeFiles)-i))
+				break
+			}
+			path := file
+			if len(path) > 60 {
+				path = "..." + path[len(path)-57:]
+			}
+			output.WriteString(fmt.Sprintf("   • %s\n", path))
+		}
+		output.WriteString("\n")
+	}
+
+	// Show bloat indicators
+	if len(analysis.BloatIndicators) > 0 {
+		output.WriteString("⚠️  Bloat Detected:\n")
+		for i, bloat := range analysis.BloatIndicators {
+			if i >= 5 {
+				output.WriteString(fmt.Sprintf("   ... and %d more\n", len(analysis.BloatIndicators)-i))
+				break
+			}
+			output.WriteString(fmt.Sprintf("   • %s (%s)\n", bloat.Pattern, bloat.Description[:min(40, len(bloat.Description))]))
+		}
+		output.WriteString("\n")
+	}
+
+	// Show packages
+	if len(analysis.InstalledPackages) > 0 {
+		output.WriteString("📦 Packages Detected:\n")
+		for i, pkg := range analysis.InstalledPackages {
+			if i >= 5 {
+				output.WriteString(fmt.Sprintf("   ... and %d more\n", len(analysis.InstalledPackages)-i))
+				break
+			}
+			output.WriteString(fmt.Sprintf("   • %s\n", pkg))
+		}
+	}
+
+	output.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+
+	return output.String()
 }

@@ -230,3 +230,107 @@ func (bd *BloatDetector) GenerateRecommendations(imageLayers *ImageLayers, bloat
 
 	return recommendations
 }
+
+// DetectBloatFromTarAnalysis performs bloat detection using actual tar file analysis
+// This uses FileAnalysisResult from real tar extraction instead of pattern matching
+func (bd *BloatDetector) DetectBloatFromTarAnalysis(analysis *FileAnalysisResult) []BloatFinding {
+	return analysis.PotentialBloat
+}
+
+// MergeBloatDetection combines pattern-based and tar-based bloat detection
+func (bd *BloatDetector) MergeBloatDetection(patternBased []BloatItem, tarBased []BloatFinding) map[string]interface{} {
+	return map[string]interface{}{
+		"pattern_based": patternBased,
+		"tar_based":     tarBased,
+		"total_items":   len(patternBased) + len(tarBased),
+	}
+}
+
+// EstimateSavingsFromTarAnalysis calculates real savings from tar analysis
+func (bd *BloatDetector) EstimateSavingsFromTarAnalysis(findings []BloatFinding) int64 {
+	var total int64
+	for _, finding := range findings {
+		if finding.Removable {
+			total += finding.Size
+		}
+	}
+	return total
+}
+
+// GenerateOptimizationRecommendationsFromAnalysis creates recommendations based on FileAnalysisResult
+func (bd *BloatDetector) GenerateOptimizationRecommendationsFromAnalysis(analysis *FileAnalysisResult) []string {
+	var recommendations []string
+
+	// Based on detected languages
+	if len(analysis.LanguageDetected) > 0 {
+		for _, lang := range analysis.LanguageDetected {
+			switch lang {
+			case "Python":
+				recommendations = append(recommendations,
+					"Python project detected: Use .dockerignore to exclude __pycache__, *.pyc files")
+				recommendations = append(recommendations,
+					"Remove pip cache after installations: 'pip install --no-cache-dir package'")
+			case "JavaScript":
+				recommendations = append(recommendations,
+					"JavaScript/Node.js project detected: Use .dockerignore to exclude node_modules, .npm")
+				recommendations = append(recommendations,
+					"Consider multi-stage builds: Node builder stage → production stage with only node_modules")
+			case "Java":
+				recommendations = append(recommendations,
+					"Java project detected: Consider jlink for minimal JRE in final image")
+			case "Go":
+				recommendations = append(recommendations,
+					"Go project detected: Excellent! Consider using distroless/scratch base image")
+			}
+		}
+	}
+
+	// Based on detected package managers
+	if len(analysis.PackageManagers) > 0 {
+		for _, pm := range analysis.PackageManagers {
+			switch pm {
+			case "apt":
+				recommendations = append(recommendations,
+					"APT detected: Run 'apt-get clean' and 'rm -rf /var/lib/apt/lists/*' after installs")
+			case "yum":
+				recommendations = append(recommendations,
+					"YUM detected: Run 'yum clean all' after installs to remove cache")
+			case "apk":
+				recommendations = append(recommendations,
+					"APK detected: Use 'apk add --no-cache' flag to skip cache creation")
+			case "npm":
+				recommendations = append(recommendations,
+					"NPM detected: Use 'npm ci --only=production' and 'npm cache clean --force'")
+			}
+		}
+	}
+
+	// Based on bloat findings
+	if len(analysis.PotentialBloat) > 0 {
+		totalBloat := int64(0)
+		for _, bloat := range analysis.PotentialBloat {
+			totalBloat += bloat.Size
+		}
+		
+		if totalBloat > 0 {
+			recommendations = append(recommendations,
+				fmt.Sprintf("Found %.2f MB of potential bloat that could be removed", float64(totalBloat)/1024/1024))
+		}
+	}
+
+	// Based on top directories
+	if len(analysis.TopDirectories) > 0 {
+		if analysis.TopDirectories[0].Size > analysis.TotalSize/2 {
+			recommendations = append(recommendations,
+				fmt.Sprintf("Directory %s contains >50%% of layer - review for optimization", analysis.TopDirectories[0].Path))
+		}
+	}
+
+	// Multi-stage build recommendations
+	if len(analysis.LanguageDetected) > 0 && analysis.FileCount > 1000 {
+		recommendations = append(recommendations,
+			"Layer has 1000+ files: Multi-stage build could reduce final image size significantly")
+	}
+
+	return recommendations
+}

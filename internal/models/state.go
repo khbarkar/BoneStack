@@ -6,7 +6,7 @@ import (
 )
 
 type AppState struct {
-	CurrentScreen string // "menu", "images", "containers", "image-detail", "container-detail", "layers", "layer-detail", "size-breakdown"
+	CurrentScreen string // "menu", "images", "containers", "image-detail", "container-detail", "layers", "layer-detail", "size-breakdown", "file-browser"
 	SelectedImage docker.ImageSummary
 	SelectedContainer docker.ContainerSummary
 	ImageList []docker.ImageSummary
@@ -18,6 +18,10 @@ type AppState struct {
 	BloatDetection map[int][]layers.BloatItem
 	LayerRecommendations []string
 	SelectedLayerIndex int
+	
+	// Tar-based analysis
+	LayerTarData []layers.LayerTarData // Real tar file data
+	FileAnalysis []layers.FileAnalysisResult // File analysis results
 	
 	Error string
 }
