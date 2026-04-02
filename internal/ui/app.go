@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/kristinb/bonestack/internal/docker"
+	"github.com/kristinb/bonestack/internal/layers"
 	"github.com/kristinb/bonestack/internal/models"
 )
 
@@ -33,6 +34,9 @@ var (
 
 type App struct {
 	docker        *docker.Client
+	layerAnalyzer *layers.Analyzer
+	bloatDetector *layers.BloatDetector
+	diffEngine    *layers.DiffEngine
 	state         *models.AppState
 	width         int
 	height        int
@@ -43,6 +47,9 @@ type App struct {
 func NewApp(ctx context.Context, dockerClient *docker.Client) *App {
 	return &App{
 		docker:        dockerClient,
+		layerAnalyzer: layers.NewAnalyzer(dockerClient),
+		bloatDetector: layers.NewBloatDetector(),
+		diffEngine:    layers.NewDiffEngine(),
 		ctx:           ctx,
 		selectedIndex: 0,
 		state: &models.AppState{
@@ -66,6 +73,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.state.ImageList = msg
 	case containersLoadedMsg:
 		a.state.ContainerList = msg
+	case layersLoadedMsg:
+		a.state.ImageLayers = msg.layers
+		a.state.LayerAnalyses = msg.analyses
+		a.state.BloatDetection = msg.bloat
+		a.state.LayerRecommendations = msg.recommendations
+		a.state.CurrentScreen = "layers"
+		a.state.SelectedLayerIndex = 0
 	}
 	return a, nil
 }
@@ -87,6 +101,12 @@ func (a *App) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleImageDetailKeys(msg)
 	case "container-detail":
 		return a.handleContainerDetailKeys(msg)
+	case "layers":
+		return a.handleLayersKeys(msg)
+	case "layer-detail":
+		return a.handleLayerDetailKeys(msg)
+	case "size-breakdown":
+		return a.handleSizeBreakdownKeys(msg)
 	}
 
 	return a, nil
@@ -157,6 +177,9 @@ func (a *App) handleContainersKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (a *App) handleImageDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "l":
+		// Load and analyze layers
+		return a, a.loadLayers()
 	case "esc", "b":
 		a.state.CurrentScreen = "images"
 		a.selectedIndex = 0
@@ -185,6 +208,12 @@ func (a *App) View() string {
 		return a.renderImageDetail()
 	case "container-detail":
 		return a.renderContainerDetail()
+	case "layers":
+		return a.renderLayers()
+	case "layer-detail":
+		return a.renderLayerDetail()
+	case "size-breakdown":
+		return a.renderSizeBreakdown()
 	default:
 		return "Unknown screen"
 	}
@@ -279,6 +308,9 @@ func (a *App) renderImageDetail() string {
 		return fmt.Sprintf("Error: %v", err)
 	}
 
+	// Get history for additional info
+	history, histErr := a.docker.GetImageHistory(a.ctx, a.state.SelectedImage.ID)
+
 	var detail strings.Builder
 	detail.WriteString(titleStyle.Render("🖼️  Image Details") + "\n\n")
 
@@ -290,6 +322,10 @@ func (a *App) renderImageDetail() string {
 	detail.WriteString(fmt.Sprintf("Created:   %d\n", a.state.SelectedImage.Created))
 	detail.WriteString(fmt.Sprintf("OS:        %s\n", inspect.Os))
 	detail.WriteString(fmt.Sprintf("Arch:      %s\n", inspect.Architecture))
+	
+	if histErr == nil && len(history) > 0 {
+		detail.WriteString(fmt.Sprintf("Layers:    %d\n", len(history)))
+	}
 	
 	if len(inspect.Config.ExposedPorts) > 0 {
 		detail.WriteString("\nExposed Ports:\n")
@@ -305,7 +341,7 @@ func (a *App) renderImageDetail() string {
 		}
 	}
 
-	detail.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	detail.WriteString("\n" + helpStyle.Render("l Layers | b Back | q Quit"))
 	return detail.String()
 }
 
@@ -344,6 +380,242 @@ func (a *App) renderContainerDetail() string {
 	return detail.String()
 }
 
+func (a *App) handleLayersKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if a.state.ImageLayers == nil || len(a.state.ImageLayers.Layers) == 0 {
+		return a, nil
+	}
+
+	switch msg.String() {
+	case "up", "k":
+		a.state.SelectedLayerIndex = (a.state.SelectedLayerIndex - 1 + len(a.state.ImageLayers.Layers)) % len(a.state.ImageLayers.Layers)
+	case "down", "j":
+		a.state.SelectedLayerIndex = (a.state.SelectedLayerIndex + 1) % len(a.state.ImageLayers.Layers)
+	case "enter":
+		a.state.CurrentScreen = "layer-detail"
+	case "s":
+		// Show size breakdown
+		a.state.CurrentScreen = "size-breakdown"
+	case "esc", "b":
+		a.state.CurrentScreen = "image-detail"
+		a.state.SelectedLayerIndex = 0
+	}
+	return a, nil
+}
+
+func (a *App) handleLayerDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "b":
+		a.state.CurrentScreen = "layers"
+	}
+	return a, nil
+}
+
+func (a *App) handleSizeBreakdownKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "b":
+		a.state.CurrentScreen = "layers"
+	}
+	return a, nil
+}
+
+func (a *App) renderLayers() string {
+	if a.state.ImageLayers == nil || len(a.state.ImageLayers.Layers) == 0 {
+		return titleStyle.Render("🔍 Image Layers") + "\n\nLoading layers...\n\n" + helpStyle.Render("b Back | q Quit")
+	}
+
+	var output strings.Builder
+	output.WriteString(titleStyle.Render("🔍 Image Layers") + "\n\n")
+
+	totalSize := int64(0)
+	for _, layer := range a.state.ImageLayers.Layers {
+		totalSize += layer.Size
+	}
+
+	// Display summary
+	output.WriteString(fmt.Sprintf("Total Layers: %d | Total Size: %s\n\n",
+		len(a.state.ImageLayers.Layers), layers.SizeFormatter(totalSize)))
+
+	// List layers
+	for i, layer := range a.state.ImageLayers.Layers {
+		pct := layers.PercentageOfTotal(layer.Size, totalSize)
+		sizeStr := layers.SizeFormatter(layer.Size)
+		
+		line := fmt.Sprintf("[%d] %8s (%.1f%%) │ %s",
+			i, sizeStr, pct, layer.Command[:minInt(50, len(layer.Command))])
+
+		if i == a.state.SelectedLayerIndex {
+			output.WriteString(selectedStyle.Render("→ " + line) + "\n")
+		} else {
+			output.WriteString(normalStyle.Render("  " + line) + "\n")
+		}
+	}
+
+	output.WriteString("\n" + helpStyle.Render("↑/↓ Navigate | Enter Details | s Size Breakdown | b Back | q Quit"))
+	return output.String()
+}
+
+func (a *App) renderLayerDetail() string {
+	if a.state.ImageLayers == nil || a.state.SelectedLayerIndex >= len(a.state.ImageLayers.Layers) {
+		return "Error: Invalid layer index\n" + helpStyle.Render("b Back | q Quit")
+	}
+
+	layer := a.state.ImageLayers.Layers[a.state.SelectedLayerIndex]
+	analysis := a.state.LayerAnalyses[a.state.SelectedLayerIndex]
+	bloat := a.state.BloatDetection[a.state.SelectedLayerIndex]
+
+	var detail strings.Builder
+	detail.WriteString(titleStyle.Render(fmt.Sprintf("🔍 Layer %d Details", a.state.SelectedLayerIndex)) + "\n\n")
+
+	detail.WriteString(fmt.Sprintf("ID:           %s\n", layer.ID[:12]))
+	detail.WriteString(fmt.Sprintf("Size:         %s\n", layers.SizeFormatter(layer.Size)))
+	detail.WriteString(fmt.Sprintf("Created:      %d\n", layer.Created))
+	detail.WriteString(fmt.Sprintf("Command:      %s\n\n", layer.Command))
+
+	detail.WriteString(fmt.Sprintf("Files Added:  ~%d\n", analysis.FilesAdded))
+	detail.WriteString(fmt.Sprintf("Dirs Added:   ~%d\n", analysis.DirsAdded))
+	detail.WriteString(fmt.Sprintf("Confidence:   %.0f%%\n\n", analysis.ConfidenceScore*100))
+
+	if len(bloat) > 0 {
+		detail.WriteString("⚠️  BLOAT DETECTED:\n")
+		for _, item := range bloat {
+			detail.WriteString(fmt.Sprintf("  • %s - %s\n", item.Pattern, item.Description))
+			if item.Removable {
+				detail.WriteString(fmt.Sprintf("    Removable: Yes (~%s)\n", layers.SizeFormatter(item.EstimatedSize)))
+			}
+		}
+	} else {
+		detail.WriteString("✅ No bloat detected\n")
+	}
+
+	detail.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	return detail.String()
+}
+
+func (a *App) renderSizeBreakdown() string {
+	if a.state.ImageLayers == nil || len(a.state.ImageLayers.Layers) == 0 {
+		return "No layers to analyze\n" + helpStyle.Render("b Back | q Quit")
+	}
+
+	var output strings.Builder
+	output.WriteString(titleStyle.Render("📊 Size Breakdown") + "\n\n")
+
+	totalSize := int64(0)
+	for _, layer := range a.state.ImageLayers.Layers {
+		totalSize += layer.Size
+	}
+
+	// Calculate cumulative sizes
+	type layerInfo struct {
+		index    int
+		size     int64
+		cumSize  int64
+		pct      float64
+		command  string
+	}
+
+	var infos []layerInfo
+	cumSize := int64(0)
+	for i, layer := range a.state.ImageLayers.Layers {
+		cumSize += layer.Size
+		pct := layers.PercentageOfTotal(layer.Size, totalSize)
+		infos = append(infos, layerInfo{
+			index:   i,
+			size:    layer.Size,
+			cumSize: cumSize,
+			pct:     pct,
+			command: layer.Command,
+		})
+	}
+
+	// Display top layers by size
+	output.WriteString(fmt.Sprintf("Total Size: %s\n\n", layers.SizeFormatter(totalSize)))
+	output.WriteString("Layer Size Breakdown:\n")
+	output.WriteString("─────────────────────────────────────────────────────\n")
+
+	for _, info := range infos {
+		bar := generateBar(int(info.pct), 20)
+		output.WriteString(fmt.Sprintf("L%-2d │ %7s │ %s │ %.1f%%\n",
+			info.index,
+			layers.SizeFormatter(info.size),
+			bar,
+			info.pct))
+	}
+
+	// Show cumulative sizes
+	output.WriteString("\nCumulative Size:\n")
+	output.WriteString("─────────────────────────────────────────────────────\n")
+	for _, info := range infos {
+		cumPct := layers.PercentageOfTotal(info.cumSize, totalSize)
+		bar := generateBar(int(cumPct), 20)
+		output.WriteString(fmt.Sprintf("→ L%-2d │ %7s │ %s │ %.1f%%\n",
+			info.index,
+			layers.SizeFormatter(info.cumSize),
+			bar,
+			cumPct))
+	}
+
+	// Show largest layers
+	output.WriteString("\n⭐ Largest Layers:\n")
+	output.WriteString("─────────────────────────────────────────────────────\n")
+
+	// Simple sort to find top 3
+	for i := 0; i < len(infos) && i < 3; i++ {
+		maxIdx := i
+		for j := i + 1; j < len(infos); j++ {
+			if infos[j].size > infos[maxIdx].size {
+				maxIdx = j
+			}
+		}
+		infos[i], infos[maxIdx] = infos[maxIdx], infos[i]
+
+		info := infos[i]
+		output.WriteString(fmt.Sprintf("%d. Layer %d: %s (%.1f%%)\n   %s\n",
+			i+1, info.index, layers.SizeFormatter(info.size), info.pct,
+			info.command[:minInt(60, len(info.command))]))
+	}
+
+	output.WriteString("\n" + helpStyle.Render("b Back | q Quit"))
+	return output.String()
+}
+
+func generateBar(percentage int, width int) string {
+	if percentage > 100 {
+		percentage = 100
+	}
+	filled := (percentage * width) / 100
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+	return bar
+}
+
+func (a *App) loadLayers() tea.Cmd {
+	return func() tea.Msg {
+		imageLayers, err := a.layerAnalyzer.AnalyzeImage(a.ctx, a.state.SelectedImage.ID)
+		if err != nil {
+			a.state.Error = err.Error()
+			return nil
+		}
+
+		// Perform analysis
+		analyses, _ := a.layerAnalyzer.AnalyzeLayerSequence(imageLayers)
+		bloatMap := a.bloatDetector.DetectInImage(imageLayers)
+		recommendations := a.bloatDetector.GenerateRecommendations(imageLayers, bloatMap)
+
+		return layersLoadedMsg{
+			layers:          imageLayers,
+			analyses:        analyses,
+			bloat:           bloatMap,
+			recommendations: recommendations,
+		}
+	}
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func (a *App) loadImages() tea.Cmd {
 	return func() tea.Msg {
 		images, err := a.docker.ListImages(a.ctx)
@@ -368,3 +640,10 @@ func (a *App) loadContainers() tea.Cmd {
 
 type imagesLoadedMsg []docker.ImageSummary
 type containersLoadedMsg []docker.ContainerSummary
+
+type layersLoadedMsg struct {
+	layers          *layers.ImageLayers
+	analyses        []layers.LayerAnalysis
+	bloat           map[int][]layers.BloatItem
+	recommendations []string
+}
