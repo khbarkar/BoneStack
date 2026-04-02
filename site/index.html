@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BoneStack</title>
+    <style>
+      :root {
+        --bg: #f5efe5;
+        --panel: #fffaf2;
+        --ink: #1c1f22;
+        --muted: #55606d;
+        --accent: #114b5f;
+        --line: #d9cfbf;
+        --soft: #e9dfd1;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Georgia, "Times New Roman", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, #fff7ea 0, transparent 26%),
+          linear-gradient(180deg, #f7f1e7 0%, var(--bg) 100%);
+      }
+      a { color: var(--accent); }
+      .wrap {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 48px 20px 64px;
+      }
+      .hero {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 32px;
+        box-shadow: 0 12px 40px rgba(17, 75, 95, 0.08);
+      }
+      h1, h2, h3 { margin: 0 0 12px; }
+      h1 { font-size: 3rem; letter-spacing: -0.03em; }
+      h2 { font-size: 1.5rem; margin-top: 36px; }
+      p { line-height: 1.6; color: var(--muted); }
+      .lede { font-size: 1.1rem; max-width: 52rem; }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 24px;
+      }
+      .button {
+        display: inline-block;
+        text-decoration: none;
+        border-radius: 999px;
+        padding: 12px 18px;
+        border: 1px solid var(--accent);
+        color: white;
+        background: var(--accent);
+        font-weight: 600;
+      }
+      .button.secondary {
+        background: transparent;
+        color: var(--accent);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+        margin-top: 20px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 20px;
+      }
+      .card p { margin: 0 0 14px; }
+      code, pre {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+      pre {
+        background: #f1e8da;
+        border: 1px solid var(--soft);
+        border-radius: 16px;
+        padding: 18px;
+        overflow-x: auto;
+        color: #2a2f34;
+      }
+      ul {
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      .footer {
+        margin-top: 40px;
+        font-size: 0.95rem;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="hero">
+        <h1>BoneStack</h1>
+        <p class="lede">
+          Container diagnostics, forensics, and optimization in a terminal UI.
+          BoneStack can inspect images and containers, hunt for suspicious artifacts,
+          diff filesystem changes, build a timeline from Docker events, export reports,
+          and optionally use YARA during threat hunting.
+        </p>
+        <div class="actions">
+          <a class="button" href="https://github.com/khbarkar/BoneStack">GitHub Repo</a>
+          <a class="button secondary" href="https://github.com/khbarkar/BoneStack/blob/main/README.md">Quick Start</a>
+          <a class="button secondary" href="https://github.com/khbarkar/BoneStack/tree/main/docs">Detailed Docs</a>
+        </div>
+      </section>
+
+      <section>
+        <h2>Install</h2>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/khbarkar/BoneStack/main/install.sh | bash</code></pre>
+        <p>After installation you can update BoneStack directly with:</p>
+        <pre><code>bonestack update</code></pre>
+      </section>
+
+      <section>
+        <h2>Core Workflows</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>Container Forensics</h3>
+            <p>Use <code>f</code> from container details to open filesystem, logs, processes, environment, resources, threat hunt, diff, and timeline views.</p>
+            <a href="https://github.com/khbarkar/BoneStack/blob/main/docs/forensics.md">Read the forensics guide</a>
+          </article>
+          <article class="card">
+            <h3>Threat Hunt + YARA</h3>
+            <p>BoneStack can scan for suspicious persistence and reverse-shell artifacts, and optionally run YARA if it is installed on the host.</p>
+            <a href="https://github.com/khbarkar/BoneStack/blob/main/docs/yara.md">Read the YARA guide</a>
+          </article>
+          <article class="card">
+            <h3>Training Containers</h3>
+            <p>Practice against safe but suspicious-looking demo containers for cron persistence, SSH artifacts, and bloated image analysis.</p>
+            <a href="https://github.com/khbarkar/BoneStack/blob/main/docs/training.md">Read the training guide</a>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>Training Examples</h2>
+        <pre><code>docker build -t bonestack-training:cron-shadow training/containers/cron-shadow
+docker build -t bonestack-training:ssh-drop training/containers/ssh-drop-demo
+docker build -t bonestack-training:bloaty-node training/containers/bloaty-node-demo</code></pre>
+      </section>
+
+      <section>
+        <h2>What BoneStack Covers</h2>
+        <ul>
+          <li>image inspection and layer analysis</li>
+          <li>optimization reports in JSON, CSV, and HTML</li>
+          <li>Dockerfile and policy scaffolding</li>
+          <li>container threat hunt, diff, and timeline workflows</li>
+          <li>combined container forensics report export</li>
+        </ul>
+      </section>
+
+      <p class="footer">
+        BoneStack is documented in the repository. This site is a lightweight landing page for GitHub Pages.
+      </p>
+    </main>
+  </body>
+  </html>

@@ -34,7 +34,13 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ## Update
 
-Rerun the same install command:
+Use the built-in update command:
+
+```bash
+bonestack update
+```
+
+If you have not installed BoneStack yet, use:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/khbarkar/BoneStack/main/install.sh | bash
@@ -44,6 +50,14 @@ curl -fsSL https://raw.githubusercontent.com/khbarkar/BoneStack/main/install.sh 
 
 ```bash
 bonestack
+```
+
+Useful commands:
+
+```bash
+bonestack help
+bonestack version
+bonestack update
 ```
 
 ## What It Does

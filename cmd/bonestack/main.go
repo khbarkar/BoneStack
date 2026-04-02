@@ -7,11 +7,20 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/kristinb/bonestack/internal/cli"
 	"github.com/kristinb/bonestack/internal/docker"
 	"github.com/kristinb/bonestack/internal/ui"
 )
 
 func main() {
+	if handled, err := cli.HandleCommand(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	ctx := context.Background()
 
 	dockerClient, err := docker.NewClient(ctx)
