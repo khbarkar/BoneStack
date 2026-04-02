@@ -258,7 +258,7 @@ func (a *App) renderImageList() string {
 			if len(img.RepoTags) > 0 {
 				name = img.RepoTags[0]
 			} else {
-				name = img.ID[:12]
+				name = safeSlice(img.ID, 12)
 			}
 			
 			size := fmt.Sprintf("%.2f MB", float64(img.Size)/1024/1024)
@@ -317,7 +317,7 @@ func (a *App) renderImageDetail() string {
 	if len(a.state.SelectedImage.RepoTags) > 0 {
 		detail.WriteString(fmt.Sprintf("Name:      %s\n", a.state.SelectedImage.RepoTags[0]))
 	}
-	detail.WriteString(fmt.Sprintf("ID:        %s\n", a.state.SelectedImage.ID[:12]))
+	detail.WriteString(fmt.Sprintf("ID:        %s\n", safeSlice(a.state.SelectedImage.ID, 12)))
 	detail.WriteString(fmt.Sprintf("Size:      %.2f MB\n", float64(a.state.SelectedImage.Size)/1024/1024))
 	detail.WriteString(fmt.Sprintf("Created:   %d\n", a.state.SelectedImage.Created))
 	detail.WriteString(fmt.Sprintf("OS:        %s\n", inspect.Os))
@@ -355,7 +355,7 @@ func (a *App) renderContainerDetail() string {
 	detail.WriteString(titleStyle.Render("📦 Container Details") + "\n\n")
 
 	detail.WriteString(fmt.Sprintf("Name:     %s\n", strings.TrimPrefix(a.state.SelectedContainer.Names[0], "/")))
-	detail.WriteString(fmt.Sprintf("ID:       %s\n", a.state.SelectedContainer.ID[:12]))
+	detail.WriteString(fmt.Sprintf("ID:       %s\n", safeSlice(a.state.SelectedContainer.ID, 12)))
 	detail.WriteString(fmt.Sprintf("Image:    %s\n", a.state.SelectedContainer.Image))
 	detail.WriteString(fmt.Sprintf("Status:   %s\n", a.state.SelectedContainer.Status))
 	detail.WriteString(fmt.Sprintf("State:    %s\n", inspect.State.Status))
@@ -466,7 +466,7 @@ func (a *App) renderLayerDetail() string {
 	var detail strings.Builder
 	detail.WriteString(titleStyle.Render(fmt.Sprintf("🔍 Layer %d Details", a.state.SelectedLayerIndex)) + "\n\n")
 
-	detail.WriteString(fmt.Sprintf("ID:           %s\n", layer.ID[:12]))
+	detail.WriteString(fmt.Sprintf("ID:           %s\n", safeSlice(layer.ID, 12)))
 	detail.WriteString(fmt.Sprintf("Size:         %s\n", layers.SizeFormatter(layer.Size)))
 	detail.WriteString(fmt.Sprintf("Created:      %d\n", layer.Created))
 	detail.WriteString(fmt.Sprintf("Command:      %s\n\n", layer.Command))
@@ -585,6 +585,13 @@ func generateBar(percentage int, width int) string {
 	filled := (percentage * width) / 100
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
 	return bar
+}
+
+func safeSlice(s string, length int) string {
+	if len(s) < length {
+		return s
+	}
+	return s[:length]
 }
 
 func (a *App) loadLayers() tea.Cmd {
