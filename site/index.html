@@ -143,9 +143,17 @@
 
       <section>
         <h2>Training Examples</h2>
+        <p>Build the safe demo containers from the repository root:</p>
         <pre><code>docker build -t bonestack-training:cron-shadow training/containers/cron-shadow
 docker build -t bonestack-training:ssh-drop training/containers/ssh-drop-demo
 docker build -t bonestack-training:bloaty-node training/containers/bloaty-node-demo</code></pre>
+        <p>Run them:</p>
+        <pre><code>docker run -d --name cron-shadow-demo bonestack-training:cron-shadow
+docker run -d --name ssh-drop-demo bonestack-training:ssh-drop
+docker run -d --name bloaty-node-demo bonestack-training:bloaty-node</code></pre>
+        <p>Then open BoneStack, go to <code>View Containers</code>, select one of the demo containers, and press <code>f</code> for the forensics menu.</p>
+        <p>Cleanup:</p>
+        <pre><code>docker rm -f cron-shadow-demo ssh-drop-demo bloaty-node-demo</code></pre>
       </section>
 
       <section>
