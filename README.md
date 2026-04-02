@@ -104,12 +104,3 @@ Examples include:
 go build -o bonestack ./cmd/bonestack/main.go
 ./bonestack
 ```
-
-## Status
-
-- Phase 1: complete
-- Phase 2: complete
-- Phase 3: complete
-- Phase 4: implemented
-- Phase 5: implemented
-- Phase 6: in progress
