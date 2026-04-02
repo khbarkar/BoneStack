@@ -1,3 +1,19 @@
+<p align="center">
+  <img src="img/logo.png" alt="VIC logo" width="717">
+</p>
+
+  <p align="center">
+    <a href="https://github.com/khbarkar/VIC/tags">
+      <img src="https://img.shields.io/github/v/tag/khbarkar/VIC?label=tag" alt="Latest Tag">
+    </a>
+    <a href="https://github.com/khbarkar/VIC/blob/main/LICENSE">
+      <img src="https://img.shields.io/github/license/khbarkar/VIC" alt="License">
+    </a>
+    <a href="https://go.dev/">
+      <img src="https://img.shields.io/badge/go-1.25.7-00ADD8?logo=go" alt="Go Version">
+    </a>
+  </p>
+
 # 🔮 BoneStack - Container Operations Inspector
 
 A tool for advanced Docker image and container diagnostics, forensics, and optimization.
