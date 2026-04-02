@@ -6,24 +6,32 @@
     <title>BoneStack</title>
     <style>
       :root {
-        --bg: #f5efe5;
-        --panel: #fffaf2;
-        --ink: #1c1f22;
-        --muted: #55606d;
-        --accent: #114b5f;
-        --line: #d9cfbf;
-        --soft: #e9dfd1;
+        --bg: #050608;
+        --bg-soft: #0b0e14;
+        --panel: rgba(12, 16, 24, 0.92);
+        --panel-strong: rgba(8, 11, 18, 0.96);
+        --ink: #f4f7ff;
+        --muted: #9aa4bd;
+        --blue: #1292ff;
+        --violet: #6b4cff;
+        --red: #ff244f;
+        --line: rgba(129, 151, 255, 0.22);
+        --glow-blue: rgba(18, 146, 255, 0.38);
+        --glow-violet: rgba(107, 76, 255, 0.28);
+        --glow-red: rgba(255, 36, 79, 0.24);
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        font-family: Georgia, "Times New Roman", serif;
+        font-family: "Trebuchet MS", "Segoe UI", Helvetica, Arial, sans-serif;
         color: var(--ink);
         background:
-          radial-gradient(circle at top left, #fff7ea 0, transparent 26%),
-          linear-gradient(180deg, #f7f1e7 0%, var(--bg) 100%);
+          radial-gradient(circle at top left, var(--glow-blue) 0, transparent 26%),
+          radial-gradient(circle at 85% 12%, var(--glow-violet) 0, transparent 22%),
+          radial-gradient(circle at 75% 85%, var(--glow-red) 0, transparent 22%),
+          linear-gradient(180deg, #040507 0%, var(--bg) 100%);
       }
-      a { color: var(--accent); }
+      a { color: var(--blue); }
       .wrap {
         max-width: 1040px;
         margin: 0 auto;
@@ -34,13 +42,67 @@
         border: 1px solid var(--line);
         border-radius: 24px;
         padding: 32px;
-        box-shadow: 0 12px 40px rgba(17, 75, 95, 0.08);
+        box-shadow:
+          0 24px 80px rgba(0, 0, 0, 0.45),
+          inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        position: relative;
+        overflow: hidden;
+      }
+      .hero::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(90deg, transparent 0, rgba(18, 146, 255, 0.08) 40%, transparent 100%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+        pointer-events: none;
+      }
+      .hero-inner {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-template-columns: 1.3fr 0.9fr;
+        gap: 24px;
+        align-items: center;
       }
       h1, h2, h3 { margin: 0 0 12px; }
-      h1 { font-size: 3rem; letter-spacing: -0.03em; }
+      h1 {
+        font-size: 3rem;
+        letter-spacing: -0.04em;
+        text-shadow: 0 0 18px rgba(18, 146, 255, 0.35);
+      }
       h2 { font-size: 1.5rem; margin-top: 36px; }
+      h3 { color: var(--ink); }
       p { line-height: 1.6; color: var(--muted); }
       .lede { font-size: 1.1rem; max-width: 52rem; }
+      .logo-frame {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        background:
+          linear-gradient(180deg, rgba(10, 13, 20, 0.95), rgba(5, 7, 10, 0.98));
+        box-shadow:
+          inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+          0 0 40px rgba(18, 146, 255, 0.12);
+        padding: 18px;
+      }
+      .logo-frame img {
+        width: 100%;
+        display: block;
+      }
+      .signal-bar {
+        display: flex;
+        gap: 10px;
+        margin: 18px 0 0;
+      }
+      .signal-bar span {
+        display: block;
+        height: 4px;
+        border-radius: 999px;
+        flex: 1;
+      }
+      .signal-bar span:nth-child(1) { background: var(--blue); box-shadow: 0 0 14px var(--glow-blue); }
+      .signal-bar span:nth-child(2) { background: var(--violet); box-shadow: 0 0 14px var(--glow-violet); }
+      .signal-bar span:nth-child(3) { background: var(--red); box-shadow: 0 0 14px var(--glow-red); }
       .actions {
         display: flex;
         flex-wrap: wrap;
@@ -52,14 +114,16 @@
         text-decoration: none;
         border-radius: 999px;
         padding: 12px 18px;
-        border: 1px solid var(--accent);
+        border: 1px solid rgba(18, 146, 255, 0.55);
         color: white;
-        background: var(--accent);
+        background: linear-gradient(90deg, var(--blue), var(--violet));
         font-weight: 600;
+        box-shadow: 0 0 20px rgba(18, 146, 255, 0.16);
       }
       .button.secondary {
         background: transparent;
-        color: var(--accent);
+        color: var(--blue);
+        border-color: rgba(107, 76, 255, 0.45);
       }
       .grid {
         display: grid;
@@ -68,22 +132,24 @@
         margin-top: 20px;
       }
       .card {
-        background: var(--panel);
+        background: linear-gradient(180deg, rgba(12, 16, 24, 0.92), rgba(8, 11, 18, 0.94));
         border: 1px solid var(--line);
         border-radius: 18px;
         padding: 20px;
+        box-shadow: 0 10px 34px rgba(0, 0, 0, 0.24);
       }
       .card p { margin: 0 0 14px; }
       code, pre {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       }
       pre {
-        background: #f1e8da;
-        border: 1px solid var(--soft);
+        background: var(--panel-strong);
+        border: 1px solid var(--line);
         border-radius: 16px;
         padding: 18px;
         overflow-x: auto;
-        color: #2a2f34;
+        color: #dce6ff;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
       }
       ul {
         color: var(--muted);
@@ -94,22 +160,57 @@
         font-size: 0.95rem;
         color: var(--muted);
       }
+      section {
+        margin-top: 32px;
+        background: rgba(8, 11, 18, 0.55);
+        border: 1px solid rgba(129, 151, 255, 0.12);
+        border-radius: 20px;
+        padding: 24px;
+      }
+      .eyebrow {
+        text-transform: uppercase;
+        letter-spacing: 0.18em;
+        color: var(--violet);
+        font-size: 0.78rem;
+        margin-bottom: 10px;
+      }
+      @media (max-width: 820px) {
+        .hero-inner {
+          grid-template-columns: 1fr;
+        }
+        h1 {
+          font-size: 2.4rem;
+        }
+      }
     </style>
   </head>
   <body>
     <main class="wrap">
       <section class="hero">
-        <h1>BoneStack</h1>
-        <p class="lede">
-          Container diagnostics, forensics, and optimization in a terminal UI.
-          BoneStack can inspect images and containers, hunt for suspicious artifacts,
-          diff filesystem changes, build a timeline from Docker events, export reports,
-          and optionally use YARA during threat hunting.
-        </p>
-        <div class="actions">
-          <a class="button" href="https://github.com/khbarkar/BoneStack">GitHub Repo</a>
-          <a class="button secondary" href="https://github.com/khbarkar/BoneStack/blob/main/README.md">Quick Start</a>
-          <a class="button secondary" href="https://github.com/khbarkar/BoneStack/tree/main/docs">Detailed Docs</a>
+        <div class="hero-inner">
+          <div>
+            <div class="eyebrow">Container Diagnostics And Forensics</div>
+            <h1>BoneStack</h1>
+            <p class="lede">
+              A dark, terminal-first toolkit for inspecting container images,
+              hunting suspicious artifacts, diffing live filesystem changes,
+              reconstructing timelines from Docker events, exporting reports,
+              and optionally running YARA during threat hunting.
+            </p>
+            <div class="signal-bar">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <div class="actions">
+              <a class="button" href="https://github.com/khbarkar/BoneStack">GitHub Repo</a>
+              <a class="button secondary" href="https://github.com/khbarkar/BoneStack/blob/main/README.md">Quick Start</a>
+              <a class="button secondary" href="https://github.com/khbarkar/BoneStack/tree/main/docs">Detailed Docs</a>
+            </div>
+          </div>
+          <div class="logo-frame">
+            <img src="https://raw.githubusercontent.com/khbarkar/BoneStack/main/img/logo.png" alt="BoneStack logo">
+          </div>
         </div>
       </section>
 
