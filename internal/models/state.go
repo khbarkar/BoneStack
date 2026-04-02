@@ -1,6 +1,7 @@
 package models
 
 import (
+	"github.com/kristinb/bonestack/internal/ai"
 	"github.com/kristinb/bonestack/internal/docker"
 	"github.com/kristinb/bonestack/internal/forensics"
 	"github.com/kristinb/bonestack/internal/layers"
@@ -42,14 +43,27 @@ type AppState struct {
 	DiffSummary     map[string]int
 	TimelineEvents  []map[string]string
 	TimelineSummary map[string]int
+	AIAnalysis      string
+	AIContextLabel  string
+	AIConfig        ai.Config
+	AIBasePrompt    string
+	AIRequests      []string
 
 	// UI state
-	ScrollOffset   int
-	FilterText     string
-	AnalysisStatus string
-	AnalysisError  string
-	ExportMessage  string
-	LastExportPath string
+	ScrollOffset      int
+	FilterText        string
+	AnalysisStatus    string
+	AnalysisError     string
+	ExportMessage     string
+	LastExportPath    string
+	AIStatus          string
+	AIError           string
+	AISettingsIndex   int
+	AISettingsEditing bool
+	AILoading         bool
+	AISpinnerFrame    int
+	AILoadingTitle    string
+	AIConnected       bool
 
 	Error string
 }

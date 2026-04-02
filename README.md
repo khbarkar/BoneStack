@@ -6,7 +6,13 @@
 
 # BoneStack
 
-Container diagnostics, forensics, and optimization in a TUI.
+AI-powered container diagnostics, forensics, and optimization in a TUI.
+
+- inspect images and containers
+- run live container forensics
+- export reports in `json`, `csv`, and `html`
+- use agentic AI follow-up inside the TUI
+- optionally use YARA during threat hunting
 
 ## Install
 
@@ -66,6 +72,7 @@ bonestack update
 - analyze image layers and bloat
 - generate optimization reports
 - generate starter Dockerfiles and policy files
+- run AI-assisted and agentic forensic analysis inside the TUI
 - run container forensics:
   - filesystem
   - processes
@@ -82,6 +89,7 @@ bonestack update
 ## Docs
 
 - [Docs Index](docs/README.md)
+- [AI Guide](docs/ai.md)
 - [Forensics Guide](docs/forensics.md)
 - [YARA Guide](docs/yara.md)
 - [Training Guide](docs/training.md)

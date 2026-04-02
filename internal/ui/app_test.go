@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/kristinb/bonestack/internal/ai"
 	"github.com/kristinb/bonestack/internal/docker"
 	"github.com/kristinb/bonestack/internal/forensics"
+	"github.com/kristinb/bonestack/internal/forensics/timeline"
 	"github.com/kristinb/bonestack/internal/layers"
 	"github.com/kristinb/bonestack/internal/models"
 	"github.com/kristinb/bonestack/internal/sde"
@@ -57,6 +59,16 @@ func TestHandleForensicsMenuKeysRoutesToEnvironmentAndResources(t *testing.T) {
 	}
 }
 
+func TestHandleMenuKeysRoutesToAISettings(t *testing.T) {
+	app := &App{state: &models.AppState{CurrentScreen: "menu"}}
+	app.selectedIndex = 2
+	model, _ := app.handleMenuKeys(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := model.(*App)
+	if updated.state.CurrentScreen != "ai-settings" {
+		t.Fatalf("expected ai-settings screen, got %q", updated.state.CurrentScreen)
+	}
+}
+
 func TestRenderEnvironmentAndResourcesWithNilAnalyzers(t *testing.T) {
 	app := &App{state: &models.AppState{CurrentScreen: "environment"}}
 
@@ -93,6 +105,29 @@ func TestRenderTimelineWithoutEvents(t *testing.T) {
 	out := app.renderTimeline()
 	if !strings.Contains(out, "No timeline events loaded") {
 		t.Fatalf("unexpected timeline render output: %q", out)
+	}
+}
+
+func TestRenderAISettings(t *testing.T) {
+	app := &App{
+		state: &models.AppState{
+			CurrentScreen: "ai-settings",
+		},
+	}
+	app.state.AIConfig.Provider = "ollama"
+	app.state.AIConfig.BaseURL = "http://127.0.0.1:11434"
+	app.state.AIConfig.Model = "llama3.2"
+	app.state.AIConfig.APIKey = "secret-token"
+
+	out := app.renderAISettings()
+	if !strings.Contains(out, "AI Settings") || !strings.Contains(out, "llama3.2") {
+		t.Fatalf("unexpected ai-settings render output: %q", out)
+	}
+	if !strings.Contains(out, "claude") || !strings.Contains(out, "gemini") || !strings.Contains(out, "grok") {
+		t.Fatalf("expected provider list in output: %q", out)
+	}
+	if !strings.Contains(out, "****oken") {
+		t.Fatalf("expected masked api key in output: %q", out)
 	}
 }
 
@@ -222,6 +257,124 @@ func TestTimelineLoadedMsgUpdatesState(t *testing.T) {
 	}
 	if updated.state.TimelineSummary["start"] != 1 {
 		t.Fatalf("unexpected timeline summary: %#v", updated.state.TimelineSummary)
+	}
+}
+
+func TestBuildAIContextThreatHunt(t *testing.T) {
+	app := &App{
+		state: &models.AppState{
+			SelectedContainer: docker.ContainerSummary{ID: "abc123", Names: []string{"/demo"}},
+			ThreatSummary:     map[string]int{"reverse-shell": 1},
+			ThreatFindings: []map[string]string{
+				{"severity": "critical", "category": "reverse-shell", "path": "/tmp/revshell.sh", "detail": "bash -i"},
+			},
+		},
+	}
+
+	ctx := app.buildAIContext("threat-hunt")
+	if !strings.Contains(ctx, "Container: demo") || !strings.Contains(ctx, "/tmp/revshell.sh") {
+		t.Fatalf("unexpected AI context: %q", ctx)
+	}
+}
+
+func TestUpdateAISettingField(t *testing.T) {
+	app := &App{state: &models.AppState{}}
+	app.state.AISettingsIndex = 2
+	app.state.AIConfig.Model = "llama"
+	app.updateAISettingField(func(value string) string { return value + "3" })
+	if app.state.AIConfig.Model != "llama3" {
+		t.Fatalf("unexpected model value %q", app.state.AIConfig.Model)
+	}
+}
+
+func TestCycleAIProvider(t *testing.T) {
+	app := &App{state: &models.AppState{}}
+	app.state.AIConfig.Provider = "openai"
+	app.state.AIConfig.BaseURL = ai.DefaultBaseURL("openai")
+	app.state.AIConfig.Model = ai.DefaultModel("openai")
+
+	app.cycleAIProvider(1)
+	if app.state.AIConfig.Provider != "claude" {
+		t.Fatalf("unexpected provider %q", app.state.AIConfig.Provider)
+	}
+	if app.state.AIConfig.BaseURL != ai.DefaultBaseURL("claude") {
+		t.Fatalf("unexpected base url %q", app.state.AIConfig.BaseURL)
+	}
+	if app.state.AIConfig.Model != ai.DefaultModel("claude") {
+		t.Fatalf("unexpected model %q", app.state.AIConfig.Model)
+	}
+}
+
+func TestRenderAIAnalysis(t *testing.T) {
+	app := &App{
+		state: &models.AppState{
+			CurrentScreen:  "ai-analysis",
+			AIContextLabel: "threat-hunt",
+			AIStatus:       "Connected. AI requested more context.",
+			AIAnalysis:     "Investigate the reverse shell path first.",
+			AIRequests:     []string{"timeline", "logs"},
+		},
+	}
+
+	out := app.renderAIAnalysis()
+	if !strings.Contains(out, "Investigate the reverse shell path first.") {
+		t.Fatalf("unexpected AI render output: %q", out)
+	}
+	if !strings.Contains(out, "timeline") || !strings.Contains(out, "Fetch Requested Context") {
+		t.Fatalf("expected requested context hints in AI render output: %q", out)
+	}
+}
+
+func TestRenderAILoading(t *testing.T) {
+	app := &App{
+		state: &models.AppState{
+			CurrentScreen:  "ai-loading",
+			AILoadingTitle: "AI Analysis",
+			AIStatus:       "Connecting to Claude...",
+			AIConfig:       ai.Config{Provider: "claude"},
+			AISpinnerFrame: 1,
+			AIConnected:    false,
+		},
+	}
+
+	out := app.renderAILoading()
+	if !strings.Contains(out, "Connecting to Claude") || !strings.Contains(out, "✦") {
+		t.Fatalf("unexpected ai-loading render output: %q", out)
+	}
+}
+
+func TestAIConnectionVerifiedMsgUpdatesState(t *testing.T) {
+	app := &App{state: &models.AppState{CurrentScreen: "ai-loading", AILoading: true}}
+	model, cmd := app.Update(aiConnectionVerifiedMsg{contextLabel: "timeline", prompt: "demo"})
+	updated := model.(*App)
+	if !updated.state.AIConnected {
+		t.Fatal("expected AIConnected to be true")
+	}
+	if !strings.Contains(updated.state.AIStatus, "Waiting on model response") {
+		t.Fatalf("unexpected AI status %q", updated.state.AIStatus)
+	}
+	if cmd == nil {
+		t.Fatal("expected follow-up analysis command")
+	}
+}
+
+func TestHandleAIAnalysisKeysFetchRequestedContext(t *testing.T) {
+	app := &App{
+		state: &models.AppState{
+			CurrentScreen:  "ai-analysis",
+			AIContextLabel: "timeline",
+			AIBasePrompt:   "Container: demo",
+			AIRequests:     []string{"timeline"},
+		},
+		timelineScanner: timeline.NewScanner(nil),
+	}
+
+	_, cmd := app.handleAIAnalysisKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd == nil {
+		t.Fatal("expected fetch requested context command")
+	}
+	if app.state.CurrentScreen != "ai-loading" {
+		t.Fatalf("expected ai-loading screen, got %q", app.state.CurrentScreen)
 	}
 }
 

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BoneStack Docs</title>
+    <style>
+      :root {
+        --bg: #050608;
+        --panel: rgba(12, 16, 24, 0.92);
+        --ink: #f4f7ff;
+        --muted: #9aa4bd;
+        --blue: #1292ff;
+        --violet: #6b4cff;
+        --red: #ff244f;
+        --line: rgba(129, 151, 255, 0.22);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Trebuchet MS", "Segoe UI", Helvetica, Arial, sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(18,146,255,0.26) 0, transparent 26%),
+          radial-gradient(circle at 85% 12%, rgba(107,76,255,0.22) 0, transparent 22%),
+          radial-gradient(circle at 75% 85%, rgba(255,36,79,0.18) 0, transparent 22%),
+          linear-gradient(180deg, #040507 0%, var(--bg) 100%);
+      }
+      a { color: var(--blue); }
+      .wrap { max-width: 980px; margin: 0 auto; padding: 48px 20px 72px; }
+      .hero, section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 28px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+      }
+      section { margin-top: 24px; }
+      h1, h2, h3 { margin: 0 0 12px; }
+      h1 { font-size: 2.6rem; letter-spacing: -0.04em; }
+      p, li { color: var(--muted); line-height: 1.65; }
+      .eyebrow { text-transform: uppercase; letter-spacing: 0.18em; color: var(--violet); font-size: 0.78rem; margin-bottom: 10px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 18px; }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 18px;
+        background: rgba(8, 11, 18, 0.9);
+      }
+      code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+      pre {
+        background: rgba(8, 11, 18, 0.96);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px;
+        overflow-x: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="hero">
+        <div class="eyebrow">BoneStack Docs</div>
+        <h1>Docs Index</h1>
+        <p>
+          BoneStack now includes AI-assisted and agentic investigation inside the TUI.
+          This page links the most useful docs without sending you to a 404.
+        </p>
+        <p>
+          <a href="../">Back to site home</a>
+        </p>
+      </section>
+
+      <section>
+        <h2>Docs</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>AI Guide</h3>
+            <p>Configure providers, run AI analysis, and use the agentic follow-up flow with `x`.</p>
+            <a href="https://github.com/khbarkar/BoneStack/blob/main/docs/ai.md">Open AI guide</a>
+          </article>
+          <article class="card">
+            <h3>Forensics Guide</h3>
+            <p>Understand what `Threat Hunt`, `Container Diff`, `Timeline`, `Environment`, and the other views do.</p>
+            <a href="https://github.com/khbarkar/BoneStack/blob/main/docs/forensics.md">Open forensics guide</a>
+          </article>
+          <article class="card">
+            <h3>YARA Guide</h3>
+            <p>See how YARA is used as a defensive content scanner inside BoneStack.</p>
+            <a href="https://github.com/khbarkar/BoneStack/blob/main/docs/yara.md">Open YARA guide</a>
+          </article>
+          <article class="card">
+            <h3>Training Guide</h3>
+            <p>Build safe demo containers, including the AI follow-up scenario.</p>
+            <a href="https://github.com/khbarkar/BoneStack/blob/main/docs/training.md">Open training guide</a>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2>AI Quick Start</h2>
+        <pre><code>bonestack
+
+Main Menu -> AI Settings
+Set provider, model, base URL, and API key
+Press s to save
+
+View Containers -> select a container -> Enter -> f
+Threat Hunt / Container Diff / Timeline -> a
+
+If AI requests more context:
+x</code></pre>
+      </section>
+
+      <section>
+        <h2>AI Demo Container</h2>
+        <pre><code>docker build -t bonestack-training:ai-followup training/containers/ai-followup-demo
+docker run -d --name ai-followup-demo bonestack-training:ai-followup</code></pre>
+      </section>
+    </main>
+  </body>
+  </html>

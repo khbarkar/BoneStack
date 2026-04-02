@@ -205,7 +205,7 @@
             <div class="actions">
               <a class="button" href="https://github.com/khbarkar/BoneStack">GitHub Repo</a>
               <a class="button secondary" href="https://github.com/khbarkar/BoneStack/blob/main/README.md">Quick Start</a>
-              <a class="button secondary" href="https://github.com/khbarkar/BoneStack/tree/main/docs">Detailed Docs</a>
+              <a class="button secondary" href="./docs/">Detailed Docs</a>
             </div>
           </div>
           <div class="logo-frame">
@@ -224,6 +224,11 @@
       <section>
         <h2>Core Workflows</h2>
         <div class="grid">
+          <article class="card">
+            <h3>AI Investigations</h3>
+            <p>Configure Ollama or hosted providers in the TUI, run AI analysis from forensic screens, and let BoneStack fetch requested follow-up context.</p>
+            <a href="./docs/">Open the AI docs</a>
+          </article>
           <article class="card">
             <h3>Container Forensics</h3>
             <p>Use <code>f</code> from container details to open filesystem, logs, processes, environment, resources, threat hunt, diff, and timeline views.</p>
@@ -247,14 +252,16 @@
         <p>Build the safe demo containers from the repository root:</p>
         <pre><code>docker build -t bonestack-training:cron-shadow training/containers/cron-shadow
 docker build -t bonestack-training:ssh-drop training/containers/ssh-drop-demo
-docker build -t bonestack-training:bloaty-node training/containers/bloaty-node-demo</code></pre>
+docker build -t bonestack-training:bloaty-node training/containers/bloaty-node-demo
+docker build -t bonestack-training:ai-followup training/containers/ai-followup-demo</code></pre>
         <p>Run them:</p>
         <pre><code>docker run -d --name cron-shadow-demo bonestack-training:cron-shadow
 docker run -d --name ssh-drop-demo bonestack-training:ssh-drop
-docker run -d --name bloaty-node-demo bonestack-training:bloaty-node</code></pre>
+docker run -d --name bloaty-node-demo bonestack-training:bloaty-node
+docker run -d --name ai-followup-demo bonestack-training:ai-followup</code></pre>
         <p>Then open BoneStack, go to <code>View Containers</code>, select one of the demo containers, and press <code>f</code> for the forensics menu.</p>
         <p>Cleanup:</p>
-        <pre><code>docker rm -f cron-shadow-demo ssh-drop-demo bloaty-node-demo</code></pre>
+        <pre><code>docker rm -f cron-shadow-demo ssh-drop-demo bloaty-node-demo ai-followup-demo</code></pre>
       </section>
 
       <section>
@@ -264,6 +271,7 @@ docker run -d --name bloaty-node-demo bonestack-training:bloaty-node</code></pre
           <li>optimization reports in JSON, CSV, and HTML</li>
           <li>Dockerfile and policy scaffolding</li>
           <li>container threat hunt, diff, and timeline workflows</li>
+          <li>AI-assisted and agentic follow-up investigation inside the TUI</li>
           <li>combined container forensics report export</li>
         </ul>
       </section>

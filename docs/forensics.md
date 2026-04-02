@@ -1,6 +1,29 @@
 # Forensics Guide
 
-BoneStack now has three container-focused forensic views that work together:
+BoneStack has several container-focused forensic views. Some are quick summaries, and some are investigation-heavy.
+
+## Forensics Views
+
+- `Filesystem`
+  - Shows the selected container's visible filesystem so you can inspect directories and spot odd paths, dropped payloads, or unexpected files.
+- `Processes`
+  - Lists running processes and process stats so you can spot shells, miners, downloaders, or other unexpected commands inside the container.
+- `Volumes`
+  - Shows mounted volumes and bind mounts so you can see what host paths or persistent storage the container can write to.
+- `Logs`
+  - Shows recent container logs so you can look for crashes, suspicious command output, callback URLs, or failed startup loops.
+- `Environment`
+  - Summarizes environment variables, groups them by type, and highlights likely secrets or risky runtime configuration.
+- `Resources`
+  - Shows CPU, memory, and process-count usage so you can spot runaway processes, suspicious load spikes, or unhealthy containers.
+- `Threat Hunt`
+  - Scans for suspicious artifacts and content like reverse shells, cron persistence, SSH key drops, encoded payloads, and YARA matches.
+- `Container Diff`
+  - Shows files added, changed, or deleted since the container started so you can see what changed at runtime.
+- `Timeline`
+  - Shows recent Docker lifecycle events such as `create`, `start`, `die`, `kill`, and `restart` for timing and sequence reconstruction.
+
+BoneStack’s highest-signal workflow is still:
 
 - `Threat Hunt`
 - `Container Diff`
@@ -30,9 +53,28 @@ Then in the TUI:
 2. Pick a container
 3. Press `f`
 4. Choose one of:
+   - `Filesystem`
+   - `Processes`
+   - `Volumes`
+   - `Logs`
+   - `Environment`
+   - `Resources`
    - `Threat Hunt`
    - `Container Diff`
    - `Timeline`
+
+## Quick Meaning Of The Main Views
+
+- `Environment`
+  - Use this when you want to understand how the container was configured at runtime.
+- `Resources`
+  - Use this when a container looks noisy, slow, overloaded, or suspiciously busy.
+- `Threat Hunt`
+  - Use this when you want BoneStack to actively look for suspicious indicators.
+- `Container Diff`
+  - Use this when you want to know what changed after container startup.
+- `Timeline`
+  - Use this when you want timing context for restarts, kills, recreations, or other Docker events.
 
 ## Threat Hunt
 

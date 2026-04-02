@@ -11,6 +11,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/kristinb/bonestack/internal/ai"
 	"github.com/kristinb/bonestack/internal/docker"
 	"github.com/kristinb/bonestack/internal/forensics"
 	"github.com/kristinb/bonestack/internal/forensics/containerdiff"
@@ -43,6 +44,15 @@ var (
 			Italic(true)
 )
 
+var aiSpinnerFrames = []string{
+	" ✦        ·     \n      ·         \n   ·        ✧   \n        ·       \n ·          ·   \n      ✦         \n    ·       ·   ",
+	"     ✦        · \n  ·         ·   \n       ·        \n   ✧        ·   \n        ·       \n ·         ✦    \n     ·       ·  ",
+	"  ·       ✦     \n       ·        \n    ✧       ·   \n ·         ·    \n      ·         \n    ·       ✦   \n         ·      ",
+	"      ·         \n ✦        ·     \n    ·       ✧   \n         ·      \n  ·         ·   \n      ✦         \n   ·        ·   ",
+	"   ·         ✦  \n       ·        \n ✧       ·      \n     ·          \n   ·         ·  \n        ✦       \n ·         ·    ",
+	"      ✦         \n  ·         ·   \n       ·      ✧ \n    ·           \n ·         ·    \n     ✦          \n        ·    ·  ",
+}
+
 type App struct {
 	docker             *docker.Client
 	layerAnalyzer      *layers.Analyzer
@@ -61,6 +71,7 @@ type App struct {
 	timelineScanner    *timeline.Scanner
 	threatScanner      *threathunt.Scanner
 	yaraScanner        *yarascan.Scanner
+	aiClient           *ai.Client
 	scaffoldGenerator  *sde.Generator
 	state              *models.AppState
 	width              int
@@ -71,6 +82,17 @@ type App struct {
 
 func NewApp(ctx context.Context, dockerClient *docker.Client) *App {
 	containerInspector := forensics.NewContainerInspector(dockerClient.Raw())
+	var loadedConfig ai.Config
+	var aiClient *ai.Client
+	if cfg, err := ai.LoadConfig(); err == nil {
+		loadedConfig = *cfg
+		aiClient = ai.NewClient(*cfg)
+	} else {
+		loadedConfig = ai.Config{
+			Provider: "ollama",
+			BaseURL:  "http://127.0.0.1:11434",
+		}
+	}
 	return &App{
 		docker:             dockerClient,
 		layerAnalyzer:      layers.NewAnalyzer(dockerClient),
@@ -89,11 +111,13 @@ func NewApp(ctx context.Context, dockerClient *docker.Client) *App {
 		timelineScanner:    timeline.NewScanner(dockerClient.Raw()),
 		threatScanner:      threathunt.NewScanner(containerInspector),
 		yaraScanner:        yarascan.NewScanner(containerInspector),
+		aiClient:           aiClient,
 		scaffoldGenerator:  sde.NewGenerator(),
 		ctx:                ctx,
 		selectedIndex:      0,
 		state: &models.AppState{
 			CurrentScreen: "menu",
+			AIConfig:      loadedConfig,
 		},
 	}
 }
@@ -149,6 +173,36 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.state.AnalysisError = msg.err
 		a.state.CurrentScreen = "timeline"
 		a.state.ScrollOffset = 0
+	case aiAnalysisLoadedMsg:
+		a.state.AIAnalysis = msg.analysis
+		a.state.AIContextLabel = msg.contextLabel
+		a.state.AIStatus = msg.status
+		a.state.AIError = msg.err
+		a.state.AIRequests = msg.requests
+		a.state.AILoading = false
+		a.state.AIConnected = msg.connected
+		a.state.CurrentScreen = "ai-analysis"
+		a.state.ScrollOffset = 0
+	case aiConnectionVerifiedMsg:
+		a.state.AIConnected = true
+		a.state.AIStatus = "Connected. Waiting on model response..."
+		a.state.AIBasePrompt = msg.prompt
+		return a, a.requestAIAnalysis(msg.contextLabel, msg.prompt)
+	case aiSettingsSavedMsg:
+		a.state.AIStatus = msg.status
+		a.state.AIError = msg.err
+		a.state.AILoading = false
+		a.state.AIConnected = msg.connected
+		a.state.CurrentScreen = "ai-settings"
+		if msg.err == "" {
+			a.state.AIConfig = msg.cfg
+			a.refreshAIClient()
+		}
+	case aiSpinnerTickMsg:
+		if a.state.AILoading {
+			a.state.AISpinnerFrame = (a.state.AISpinnerFrame + 1) % len(aiSpinnerFrames)
+			return a, aiSpinnerTick()
+		}
 	}
 	return a, nil
 }
@@ -202,13 +256,19 @@ func (a *App) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleTimelineKeys(msg)
 	case "threat-hunt":
 		return a.handleThreatHuntKeys(msg)
+	case "ai-analysis":
+		return a.handleAIAnalysisKeys(msg)
+	case "ai-settings":
+		return a.handleAISettingsKeys(msg)
+	case "ai-loading":
+		return a.handleAILoadingKeys(msg)
 	}
 
 	return a, nil
 }
 
 func (a *App) handleMenuKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	menuItems := []string{"View Images", "View Containers", "Exit"}
+	menuItems := []string{"View Images", "View Containers", "AI Settings", "Exit"}
 
 	switch msg.String() {
 	case "up", "k":
@@ -225,6 +285,10 @@ func (a *App) handleMenuKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			a.state.CurrentScreen = "containers"
 			a.selectedIndex = 0
 			return a, a.loadContainers()
+		case "AI Settings":
+			a.state.CurrentScreen = "ai-settings"
+			a.state.AISettingsIndex = 0
+			a.state.AISettingsEditing = false
 		case "Exit":
 			return a, tea.Quit
 		}
@@ -367,6 +431,12 @@ func (a *App) View() string {
 		return a.renderTimeline()
 	case "threat-hunt":
 		return a.renderThreatHunt()
+	case "ai-analysis":
+		return a.renderAIAnalysis()
+	case "ai-settings":
+		return a.renderAISettings()
+	case "ai-loading":
+		return a.renderAILoading()
 	default:
 		return "Unknown screen"
 	}
@@ -378,6 +448,7 @@ func (a *App) renderMenu() string {
 	menuItems := []string{
 		"View Images",
 		"View Containers",
+		"AI Settings",
 		"Exit",
 	}
 
@@ -1004,6 +1075,148 @@ func (a *App) loadTimeline() tea.Cmd {
 	}
 }
 
+func (a *App) loadAIAnalysis(contextLabel, prompt string) tea.Cmd {
+	a.state.AIBasePrompt = prompt
+	a.state.AIRequests = nil
+	a.state.AIStatus = "Connecting to " + providerLabel(a.state.AIConfig.Provider) + "..."
+	a.state.AIError = ""
+	a.state.AILoading = true
+	a.state.AIConnected = false
+	a.state.AILoadingTitle = "AI Analysis"
+	a.state.AISpinnerFrame = 0
+	a.state.CurrentScreen = "ai-loading"
+	return tea.Batch(aiSpinnerTick(), func() tea.Msg {
+		if a.aiClient == nil {
+			return aiAnalysisLoadedMsg{
+				contextLabel: contextLabel,
+				status:       "AI analysis unavailable.",
+				err:          "set BONESTACK_AI_PROVIDER and BONESTACK_AI_MODEL to enable AI analysis",
+			}
+		}
+
+		pingCtx, cancel := context.WithTimeout(a.ctx, 8*time.Second)
+		err := a.aiClient.Ping(pingCtx)
+		cancel()
+		if err != nil {
+			return aiAnalysisLoadedMsg{
+				contextLabel: contextLabel,
+				status:       "AI connectivity check failed.",
+				err:          err.Error(),
+			}
+		}
+		return aiConnectionVerifiedMsg{contextLabel: contextLabel, prompt: prompt}
+	})
+}
+
+func (a *App) requestAIAnalysis(contextLabel, prompt string) tea.Cmd {
+	return func() tea.Msg {
+		analysis, err := a.aiClient.Analyze(a.ctx, ai.BuildAgentPrompt(prompt))
+		if err != nil {
+			return aiAnalysisLoadedMsg{
+				contextLabel: contextLabel,
+				status:       "Connected. AI analysis failed.",
+				connected:    true,
+				err:          err.Error(),
+			}
+		}
+
+		parsed := ai.ParseAgentResponse(analysis)
+		status := "Connected. AI analysis completed."
+		if len(parsed.Requests) > 0 {
+			status = "Connected. AI requested more context."
+		}
+
+		return aiAnalysisLoadedMsg{
+			analysis:     parsed.Analysis,
+			contextLabel: contextLabel,
+			status:       status,
+			connected:    true,
+			requests:     parsed.Requests,
+		}
+	}
+}
+
+func (a *App) saveAISettings() tea.Cmd {
+	cfg := a.state.AIConfig
+	a.state.AIStatus = "Saving AI settings..."
+	a.state.AIError = ""
+	a.state.AILoading = true
+	a.state.AIConnected = false
+	a.state.AILoadingTitle = "AI Settings"
+	a.state.AISpinnerFrame = 0
+	a.state.CurrentScreen = "ai-loading"
+	return tea.Batch(aiSpinnerTick(), func() tea.Msg {
+		normalized, err := cfg.Normalize()
+		if err != nil {
+			return aiSettingsSavedMsg{status: "AI settings invalid.", err: err.Error()}
+		}
+		if err := ai.SaveStoredConfig(*normalized); err != nil {
+			return aiSettingsSavedMsg{status: "Failed to save AI settings.", err: err.Error()}
+		}
+		client := ai.NewClient(*normalized)
+		pingCtx, cancel := context.WithTimeout(a.ctx, 8*time.Second)
+		err = client.Ping(pingCtx)
+		cancel()
+		if err != nil {
+			return aiSettingsSavedMsg{
+				status: "AI settings saved, but connectivity test failed.",
+				err:    err.Error(),
+				cfg:    *normalized,
+			}
+		}
+		return aiSettingsSavedMsg{
+			status:    "AI settings saved. Connected to " + providerLabel(normalized.Provider) + ".",
+			cfg:       *normalized,
+			connected: true,
+		}
+	})
+}
+
+func (a *App) reloadAISettings() tea.Cmd {
+	a.state.AIStatus = "Reloading AI settings..."
+	a.state.AIError = ""
+	return func() tea.Msg {
+		cfg, err := ai.LoadStoredConfig()
+		if err != nil {
+			return aiSettingsSavedMsg{status: "Failed to reload AI settings.", err: err.Error()}
+		}
+		return aiSettingsSavedMsg{
+			status: "AI settings reloaded.",
+			cfg:    *cfg,
+		}
+	}
+}
+
+func (a *App) loadAIRequestedContext() tea.Cmd {
+	requests := append([]string(nil), a.state.AIRequests...)
+	basePrompt := a.state.AIBasePrompt
+	contextLabel := a.state.AIContextLabel
+	a.state.AIStatus = "Collecting requested forensic context..."
+	a.state.AIError = ""
+	a.state.AILoading = true
+	a.state.AIConnected = true
+	a.state.AILoadingTitle = "AI Follow-up"
+	a.state.AISpinnerFrame = 0
+	a.state.CurrentScreen = "ai-loading"
+
+	return tea.Batch(aiSpinnerTick(), func() tea.Msg {
+		extra, err := a.collectAIRequestedContext(requests)
+		if err != nil {
+			return aiAnalysisLoadedMsg{
+				contextLabel: contextLabel,
+				status:       "Failed to collect requested context.",
+				connected:    true,
+				err:          err.Error(),
+			}
+		}
+
+		return aiConnectionVerifiedMsg{
+			contextLabel: contextLabel,
+			prompt:       basePrompt + "\n\nAdditional requested context:\n\n" + extra,
+		}
+	})
+}
+
 type imagesLoadedMsg []docker.ImageSummary
 type containersLoadedMsg []docker.ContainerSummary
 
@@ -1047,6 +1260,29 @@ type timelineLoadedMsg struct {
 	status  string
 	err     string
 }
+
+type aiAnalysisLoadedMsg struct {
+	analysis     string
+	contextLabel string
+	status       string
+	err          string
+	connected    bool
+	requests     []string
+}
+
+type aiConnectionVerifiedMsg struct {
+	contextLabel string
+	prompt       string
+}
+
+type aiSettingsSavedMsg struct {
+	status    string
+	err       string
+	cfg       ai.Config
+	connected bool
+}
+
+type aiSpinnerTickMsg time.Time
 
 // renderFileBrowser displays file information for a layer
 func (a *App) renderFileBrowser() string {
@@ -1520,6 +1756,8 @@ func (a *App) handleContainerDiffKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.loadContainerDiff()
 	case "w":
 		return a, a.exportContainerForensicsReport()
+	case "a":
+		return a, a.loadAIAnalysis("container-diff", a.buildAIContext("container-diff"))
 	case "esc", "b":
 		a.state.CurrentScreen = "forensics-menu"
 		a.selectedIndex = 0
@@ -1542,6 +1780,8 @@ func (a *App) handleTimelineKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.loadTimeline()
 	case "w":
 		return a, a.exportContainerForensicsReport()
+	case "a":
+		return a, a.loadAIAnalysis("timeline", a.buildAIContext("timeline"))
 	case "esc", "b":
 		a.state.CurrentScreen = "forensics-menu"
 		a.selectedIndex = 0
@@ -1564,10 +1804,106 @@ func (a *App) handleThreatHuntKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, a.loadThreatHunt()
 	case "w":
 		return a, a.exportContainerForensicsReport()
+	case "a":
+		return a, a.loadAIAnalysis("threat-hunt", a.buildAIContext("threat-hunt"))
 	case "esc", "b":
 		a.state.CurrentScreen = "forensics-menu"
 		a.selectedIndex = 0
 		a.state.ScrollOffset = 0
+	}
+	return a, nil
+}
+
+func (a *App) handleAIAnalysisKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		if a.state.ScrollOffset > 0 {
+			a.state.ScrollOffset--
+		}
+	case "down", "j":
+		a.state.ScrollOffset++
+	case "x":
+		if len(a.state.AIRequests) > 0 {
+			return a, a.loadAIRequestedContext()
+		}
+	case "esc", "b":
+		if a.state.AIContextLabel != "" {
+			a.state.CurrentScreen = a.state.AIContextLabel
+		} else {
+			a.state.CurrentScreen = "forensics-menu"
+		}
+		a.state.ScrollOffset = 0
+	}
+	return a, nil
+}
+
+func (a *App) handleAILoadingKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "b":
+		if a.state.AILoadingTitle == "AI Settings" {
+			a.state.CurrentScreen = "ai-settings"
+		} else if a.state.AIContextLabel != "" {
+			a.state.CurrentScreen = a.state.AIContextLabel
+		} else {
+			a.state.CurrentScreen = "forensics-menu"
+		}
+	}
+	return a, nil
+}
+
+func (a *App) handleAISettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	fields := aiSettingsFieldCount()
+	if a.state.AISettingsEditing {
+		switch msg.Type {
+		case tea.KeyEsc:
+			a.state.AISettingsEditing = false
+			return a, nil
+		case tea.KeyBackspace:
+			a.updateAISettingField(func(value string) string {
+				if len(value) == 0 {
+					return value
+				}
+				return value[:len(value)-1]
+			})
+			return a, nil
+		case tea.KeyRunes:
+			input := string(msg.Runes)
+			a.updateAISettingField(func(value string) string { return value + input })
+			return a, nil
+		case tea.KeyEnter:
+			a.state.AISettingsEditing = false
+			return a, nil
+		}
+	}
+
+	switch msg.String() {
+	case "up", "k":
+		a.state.AISettingsIndex = (a.state.AISettingsIndex - 1 + fields) % fields
+	case "down", "j":
+		a.state.AISettingsIndex = (a.state.AISettingsIndex + 1) % fields
+	case "left", "h":
+		if a.state.AISettingsIndex == 0 {
+			a.cycleAIProvider(-1)
+		}
+	case "right", "l":
+		if a.state.AISettingsIndex == 0 {
+			a.cycleAIProvider(1)
+		} else {
+			return a, a.reloadAISettings()
+		}
+	case "enter":
+		if a.state.AISettingsIndex == 0 {
+			a.cycleAIProvider(1)
+		} else {
+			a.state.AISettingsEditing = true
+		}
+	case "s":
+		return a, a.saveAISettings()
+	case "ctrl+l":
+		return a, a.reloadAISettings()
+	case "esc", "b":
+		a.state.CurrentScreen = "menu"
+		a.selectedIndex = 0
 	}
 	return a, nil
 }
@@ -1630,7 +1966,7 @@ func (a *App) renderContainerDiff() string {
 
 	if len(a.state.DiffChanges) == 0 {
 		out.WriteString("\nNo container diff changes loaded.\n\n")
-		out.WriteString(helpStyle.Render("r Reload | b Back | q Quit"))
+		out.WriteString(helpStyle.Render("r Reload | a AI Analyze | b Back | q Quit"))
 		return out.String()
 	}
 
@@ -1666,7 +2002,7 @@ func (a *App) renderContainerDiff() string {
 		out.WriteString(fmt.Sprintf("\n(Showing changes %d-%d of %d)\n", start+1, end, len(a.state.DiffChanges)))
 	}
 
-	out.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | r Reload | w Write Report | b Back | q Quit"))
+	out.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | a AI Analyze | r Reload | w Write Report | b Back | q Quit"))
 	return out.String()
 }
 
@@ -1695,7 +2031,7 @@ func (a *App) renderTimeline() string {
 
 	if len(a.state.TimelineEvents) == 0 {
 		out.WriteString("\nNo timeline events loaded.\n\n")
-		out.WriteString(helpStyle.Render("r Reload | w Write Report | b Back | q Quit"))
+		out.WriteString(helpStyle.Render("r Reload | a AI Analyze | w Write Report | b Back | q Quit"))
 		return out.String()
 	}
 
@@ -1726,7 +2062,7 @@ func (a *App) renderTimeline() string {
 	if len(a.state.TimelineEvents) > visibleRows {
 		out.WriteString(fmt.Sprintf("\n(Showing events %d-%d of %d)\n", start+1, end, len(a.state.TimelineEvents)))
 	}
-	out.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | r Reload | w Write Report | b Back | q Quit"))
+	out.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | a AI Analyze | r Reload | w Write Report | b Back | q Quit"))
 	return out.String()
 }
 
@@ -1755,7 +2091,7 @@ func (a *App) renderThreatHunt() string {
 
 	if len(a.state.ThreatFindings) == 0 {
 		out.WriteString("\nNo threat-hunt findings loaded.\n\n")
-		out.WriteString(helpStyle.Render("r Rescan | w Write Report | b Back | q Quit"))
+		out.WriteString(helpStyle.Render("r Rescan | a AI Analyze | w Write Report | b Back | q Quit"))
 		return out.String()
 	}
 
@@ -1788,7 +2124,146 @@ func (a *App) renderThreatHunt() string {
 		out.WriteString(fmt.Sprintf("\n(Showing findings %d-%d of %d)\n", start+1, end, len(a.state.ThreatFindings)))
 	}
 
-	out.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | r Rescan | w Write Report | b Back | q Quit"))
+	out.WriteString("\n" + helpStyle.Render("↑/↓ Scroll | a AI Analyze | r Rescan | w Write Report | b Back | q Quit"))
+	return out.String()
+}
+
+func (a *App) renderAIAnalysis() string {
+	var out strings.Builder
+	out.WriteString(titleStyle.Render("🤖 AI Analysis") + "\n\n")
+	if a.state.AIContextLabel != "" {
+		out.WriteString("Context: " + a.state.AIContextLabel + "\n")
+	}
+	if a.state.AIStatus != "" {
+		out.WriteString("Status:  " + a.state.AIStatus + "\n")
+	}
+	if a.state.AIError != "" {
+		out.WriteString("Error:   " + a.state.AIError + "\n\n")
+		out.WriteString(helpStyle.Render("b Back | q Quit"))
+		return out.String()
+	}
+	if len(a.state.AIRequests) > 0 {
+		out.WriteString("Requested Context:\n")
+		for _, req := range a.state.AIRequests {
+			out.WriteString("  - " + req + "\n")
+		}
+		out.WriteString("\n")
+	}
+
+	if strings.TrimSpace(a.state.AIAnalysis) == "" {
+		out.WriteString("\nNo AI analysis available.\n\n")
+		if len(a.state.AIRequests) > 0 {
+			out.WriteString(helpStyle.Render("x Fetch Requested Context | b Back | q Quit"))
+		} else {
+			out.WriteString(helpStyle.Render("b Back | q Quit"))
+		}
+		return out.String()
+	}
+
+	lines := strings.Split(a.state.AIAnalysis, "\n")
+	start := a.state.ScrollOffset
+	if start < 0 {
+		start = 0
+	}
+	if start > len(lines)-1 && len(lines) > 0 {
+		start = len(lines) - 1
+	}
+	visibleRows := 16
+	if a.height > 12 {
+		visibleRows = a.height - 8
+	}
+	end := start + visibleRows
+	if end > len(lines) {
+		end = len(lines)
+	}
+
+	out.WriteString("\n")
+	for i := start; i < end; i++ {
+		out.WriteString(lines[i] + "\n")
+	}
+	if len(lines) > visibleRows {
+		out.WriteString(fmt.Sprintf("\n(Showing lines %d-%d of %d)\n", start+1, end, len(lines)))
+	}
+	help := "↑/↓ Scroll | b Back | q Quit"
+	if len(a.state.AIRequests) > 0 {
+		help = "↑/↓ Scroll | x Fetch Requested Context | b Back | q Quit"
+	}
+	out.WriteString("\n" + helpStyle.Render(help))
+	return out.String()
+}
+
+func (a *App) renderAILoading() string {
+	var out strings.Builder
+	out.WriteString(titleStyle.Render("🤖 "+a.state.AILoadingTitle) + "\n\n")
+	out.WriteString("Provider: " + providerLabel(a.state.AIConfig.Provider) + "\n")
+	if a.state.AIConnected {
+		out.WriteString("Status:   Connected. Waiting on model response...\n\n")
+	} else {
+		out.WriteString("Status:   " + a.state.AIStatus + "\n\n")
+	}
+
+	frame := aiSpinnerFrames[a.state.AISpinnerFrame%len(aiSpinnerFrames)]
+	for _, line := range strings.Split(frame, "\n") {
+		out.WriteString(normalStyle.Render(line) + "\n")
+	}
+
+	if a.state.AIConnected {
+		out.WriteString("\n" + normalStyle.Render("The backend responded. BoneStack is waiting on the full analysis."))
+	} else {
+		out.WriteString("\n" + normalStyle.Render("Testing connectivity and submitting the forensic context."))
+	}
+	out.WriteString("\n\n" + helpStyle.Render("b Back | q Quit"))
+	return out.String()
+}
+
+func (a *App) renderAISettings() string {
+	var out strings.Builder
+	out.WriteString(titleStyle.Render("⚙️ AI Settings") + "\n\n")
+
+	fields := []struct {
+		label string
+		value string
+	}{
+		{"Provider", a.state.AIConfig.Provider},
+		{"Base URL", a.state.AIConfig.BaseURL},
+		{"Model", a.state.AIConfig.Model},
+		{"API Key", maskSecret(a.state.AIConfig.APIKey)},
+	}
+
+	out.WriteString("Configure one backend inside BoneStack.\n")
+	out.WriteString("Provider options: ollama, openai, claude, grok, gemini, openai-compatible, kiro\n")
+	out.WriteString("Use ←/→ on Provider to cycle. Kiro is listed for visibility, but it does not currently expose an API-key model endpoint.\n\n")
+
+	for i, field := range fields {
+		line := fmt.Sprintf("%-10s %s", field.label+":", field.value)
+		if i == a.state.AISettingsIndex {
+			prefix := "→ "
+			if a.state.AISettingsEditing {
+				prefix = "✎ "
+			}
+			out.WriteString(selectedStyle.Render(prefix+line) + "\n")
+		} else {
+			out.WriteString(normalStyle.Render("  "+line) + "\n")
+		}
+	}
+
+	if a.state.AIStatus != "" {
+		out.WriteString("\nStatus: " + a.state.AIStatus + "\n")
+	}
+	if a.state.AIConnected {
+		out.WriteString("Connection: verified\n")
+	}
+	if a.state.AIError != "" {
+		out.WriteString("Error:  " + a.state.AIError + "\n")
+	}
+
+	out.WriteString("\nExamples:\n")
+	out.WriteString("  ollama             http://127.0.0.1:11434    llama3.2\n")
+	out.WriteString("  openai             https://api.openai.com    gpt-4.1-mini\n")
+	out.WriteString("  claude             https://api.anthropic.com claude-sonnet-4-20250514\n")
+	out.WriteString("  grok               https://api.x.ai/v1       grok-3-mini\n")
+	out.WriteString("  gemini             https://generativelanguage.googleapis.com/v1beta gemini-2.5-flash\n")
+	out.WriteString("\n" + helpStyle.Render("↑/↓ Select | ←/→ Provider | Enter Edit | s Save | l Load | b Back | q Quit"))
 	return out.String()
 }
 
@@ -2072,6 +2547,314 @@ func scaffoldAnalysisFindingLines(analyses []layers.FileAnalysisResult) []string
 func sanitizeFilename(name string) string {
 	replacer := strings.NewReplacer("/", "_", ":", "_", "@", "_", " ", "_")
 	return replacer.Replace(name)
+}
+
+func aiSettingsFieldCount() int {
+	return 4
+}
+
+func (a *App) updateAISettingField(update func(string) string) {
+	switch a.state.AISettingsIndex {
+	case 0:
+		a.state.AIConfig.Provider = update(a.state.AIConfig.Provider)
+	case 1:
+		a.state.AIConfig.BaseURL = update(a.state.AIConfig.BaseURL)
+	case 2:
+		a.state.AIConfig.Model = update(a.state.AIConfig.Model)
+	case 3:
+		a.state.AIConfig.APIKey = update(a.state.AIConfig.APIKey)
+	}
+}
+
+func (a *App) refreshAIClient() {
+	if normalized, err := a.state.AIConfig.Normalize(); err == nil {
+		a.aiClient = ai.NewClient(*normalized)
+		a.state.AIConfig = *normalized
+	} else {
+		a.aiClient = nil
+	}
+}
+
+func (a *App) cycleAIProvider(delta int) {
+	options := ai.ProviderOptions()
+	if len(options) == 0 {
+		return
+	}
+
+	current := strings.ToLower(strings.TrimSpace(a.state.AIConfig.Provider))
+	previousDefault := ai.DefaultBaseURL(current)
+	previousModelDefault := ai.DefaultModel(current)
+	index := 0
+	for i, option := range options {
+		if option == current {
+			index = i
+			break
+		}
+	}
+
+	index = (index + delta + len(options)) % len(options)
+	a.state.AIConfig.Provider = options[index]
+	if strings.TrimSpace(a.state.AIConfig.BaseURL) == "" || a.state.AIConfig.BaseURL == previousDefault {
+		a.state.AIConfig.BaseURL = ai.DefaultBaseURL(a.state.AIConfig.Provider)
+	}
+	if strings.TrimSpace(a.state.AIConfig.Model) == "" || a.state.AIConfig.Model == previousModelDefault {
+		a.state.AIConfig.Model = ai.DefaultModel(a.state.AIConfig.Provider)
+	}
+	if normalized, err := a.state.AIConfig.Normalize(); err == nil {
+		a.state.AIConfig = *normalized
+		a.state.AIError = ""
+	} else {
+		a.state.AIError = err.Error()
+	}
+}
+
+func maskSecret(value string) string {
+	if value == "" {
+		return ""
+	}
+	if len(value) <= 4 {
+		return strings.Repeat("*", len(value))
+	}
+	return strings.Repeat("*", len(value)-4) + value[len(value)-4:]
+}
+
+func aiSpinnerTick() tea.Cmd {
+	return tea.Tick(180*time.Millisecond, func(t time.Time) tea.Msg {
+		return aiSpinnerTickMsg(t)
+	})
+}
+
+func providerLabel(provider string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "ollama":
+		return "Ollama"
+	case "openai":
+		return "OpenAI"
+	case "claude":
+		return "Claude"
+	case "grok":
+		return "Grok"
+	case "gemini":
+		return "Gemini"
+	case "openai-compatible":
+		return "OpenAI-Compatible"
+	case "kiro":
+		return "Kiro"
+	default:
+		return provider
+	}
+}
+
+func (a *App) collectAIRequestedContext(requests []string) (string, error) {
+	var out strings.Builder
+	containerID := a.state.SelectedContainer.ID
+
+	for _, request := range requests {
+		switch request {
+		case "threat-hunt":
+			if a.threatScanner == nil {
+				return "", fmt.Errorf("threat-hunt analyzer not initialized")
+			}
+			result, err := a.threatScanner.HuntLive(a.ctx, containerID)
+			if err != nil {
+				return "", fmt.Errorf("threat-hunt: %w", err)
+			}
+			out.WriteString("## threat-hunt\n")
+			for _, line := range sortedIntMapLines(result.Summary) {
+				out.WriteString(line + "\n")
+			}
+			for _, finding := range result.Findings {
+				out.WriteString(fmt.Sprintf("[%s] %s | %s | %s\n", strings.ToUpper(finding.Severity), finding.Category, finding.Path, finding.Detail))
+			}
+			out.WriteString("\n")
+		case "container-diff":
+			if a.diffScanner == nil {
+				return "", fmt.Errorf("container-diff analyzer not initialized")
+			}
+			result, err := a.diffScanner.Diff(a.ctx, containerID)
+			if err != nil {
+				return "", fmt.Errorf("container-diff: %w", err)
+			}
+			out.WriteString("## container-diff\n")
+			for _, line := range sortedIntMapLines(result.Summary) {
+				out.WriteString(line + "\n")
+			}
+			for _, change := range result.Changes {
+				out.WriteString(fmt.Sprintf("%s suspicious=%t | %s | %s\n", change.Kind, change.Suspicious, change.Path, change.Detail))
+			}
+			out.WriteString("\n")
+		case "timeline":
+			if a.timelineScanner == nil {
+				return "", fmt.Errorf("timeline analyzer not initialized")
+			}
+			result, err := a.timelineScanner.RecentContainerEvents(a.ctx, containerID, time.Hour)
+			if err != nil {
+				return "", fmt.Errorf("timeline: %w", err)
+			}
+			out.WriteString("## timeline\n")
+			for _, line := range sortedIntMapLines(result.Summary) {
+				out.WriteString(line + "\n")
+			}
+			for _, event := range result.Events {
+				out.WriteString(fmt.Sprintf("%s | %s | %s | %s\n", event.Time, event.Action, event.Actor, event.Details))
+			}
+			out.WriteString("\n")
+		case "logs":
+			if a.logAnalyzer == nil {
+				return "", fmt.Errorf("log analyzer not initialized")
+			}
+			logs, err := a.logAnalyzer.GetLogs(a.ctx, containerID, 120)
+			if err != nil {
+				return "", fmt.Errorf("logs: %w", err)
+			}
+			out.WriteString("## logs\n")
+			for _, line := range limitLines(strings.Split(strings.TrimSpace(logs), "\n"), 40) {
+				out.WriteString(line + "\n")
+			}
+			out.WriteString("\n")
+		case "environment":
+			if a.envAnalyzer == nil {
+				return "", fmt.Errorf("environment analyzer not initialized")
+			}
+			summary, err := a.envAnalyzer.GetEnvironmentSummary(a.ctx, containerID)
+			if err != nil {
+				return "", fmt.Errorf("environment: %w", err)
+			}
+			secrets, names, err := a.envAnalyzer.FindSecrets(a.ctx, containerID)
+			if err != nil {
+				return "", fmt.Errorf("environment secrets: %w", err)
+			}
+			out.WriteString("## environment\n")
+			out.WriteString(fmt.Sprintf("total_variables=%v\n", summary["total_variables"]))
+			out.WriteString(fmt.Sprintf("secret_count=%v\n", summary["secret_count"]))
+			if categories, ok := summary["categories"].(map[string]int); ok {
+				for _, line := range sortedIntMapLines(categories) {
+					out.WriteString(line + "\n")
+				}
+			}
+			for _, name := range names {
+				out.WriteString(fmt.Sprintf("secret %s=%s\n", name, secrets[name]))
+			}
+			out.WriteString("\n")
+		case "resources":
+			if a.resourceMonitor == nil {
+				return "", fmt.Errorf("resource monitor not initialized")
+			}
+			stats, err := a.resourceMonitor.GetStats(a.ctx, containerID)
+			if err != nil {
+				return "", fmt.Errorf("resources: %w", err)
+			}
+			out.WriteString("## resources\n")
+			out.WriteString(fmt.Sprintf("cpu_percent=%.2f\nmemory_used_mb=%.2f\nmemory_limit_mb=%.2f\nmemory_percent=%.2f\nprocess_count=%d\n\n",
+				stats.CPUPercent, stats.MemoryUsageMB, stats.MemoryLimitMB, stats.MemoryPercent, stats.ProcessCount))
+		case "processes":
+			if a.processAnalyzer == nil {
+				return "", fmt.Errorf("process analyzer not initialized")
+			}
+			stats, err := a.processAnalyzer.GetProcessStats(a.ctx, containerID)
+			if err != nil {
+				return "", fmt.Errorf("processes: %w", err)
+			}
+			out.WriteString("## processes\n")
+			out.WriteString(fmt.Sprintf("total=%d running=%d sleeping=%d zombie=%d stopped=%d\n",
+				stats.TotalProcesses, stats.RunningProcs, stats.SleepingProcs, stats.ZombieProcs, stats.StoppedProcs))
+			for _, proc := range limitProcesses(stats.TopByCPU, 10) {
+				out.WriteString(fmt.Sprintf("pid=%d cpu=%.2f mem=%.2f cmd=%s\n", proc.PID, proc.CPU, proc.Memory, proc.Command))
+			}
+			out.WriteString("\n")
+		case "filesystem":
+			if a.fsInspector == nil {
+				return "", fmt.Errorf("filesystem inspector not initialized")
+			}
+			stats, err := a.fsInspector.GetDirectoryStats(a.ctx, containerID, "/")
+			if err != nil {
+				return "", fmt.Errorf("filesystem: %w", err)
+			}
+			out.WriteString("## filesystem\n")
+			out.WriteString(fmt.Sprintf("path=%s files=%d dirs=%d total_size=%d\n", stats.Path, stats.FileCount, stats.DirCount, stats.TotalSize))
+			for _, file := range limitFiles(stats.LargestFiles, 10) {
+				out.WriteString(fmt.Sprintf("large path=%s size=%d perms=%s\n", file.Path, file.Size, file.Perms))
+			}
+			out.WriteString("\n")
+		}
+	}
+
+	return strings.TrimSpace(out.String()), nil
+}
+
+func limitLines(lines []string, max int) []string {
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		filtered = append(filtered, line)
+		if len(filtered) >= max {
+			break
+		}
+	}
+	return filtered
+}
+
+func limitProcesses(procs []forensics.Process, max int) []forensics.Process {
+	if len(procs) > max {
+		return procs[:max]
+	}
+	return procs
+}
+
+func limitFiles(files []forensics.FileInfo, max int) []forensics.FileInfo {
+	if len(files) > max {
+		return files[:max]
+	}
+	return files
+}
+
+func (a *App) buildAIContext(screen string) string {
+	containerName := safeSlice(a.state.SelectedContainer.ID, 12)
+	if len(a.state.SelectedContainer.Names) > 0 {
+		containerName = strings.TrimPrefix(a.state.SelectedContainer.Names[0], "/")
+	}
+
+	var out strings.Builder
+	out.WriteString("Container: " + containerName + "\n")
+	out.WriteString("Screen: " + screen + "\n\n")
+
+	switch screen {
+	case "threat-hunt":
+		out.WriteString("Threat Summary:\n")
+		for _, line := range sortedIntMapLines(a.state.ThreatSummary) {
+			out.WriteString(line + "\n")
+		}
+		out.WriteString("\nThreat Findings:\n")
+		for _, finding := range a.state.ThreatFindings {
+			out.WriteString(fmt.Sprintf("[%s] %s | %s | %s\n", finding["severity"], finding["category"], finding["path"], finding["detail"]))
+		}
+	case "container-diff":
+		out.WriteString("Diff Summary:\n")
+		for _, line := range sortedIntMapLines(a.state.DiffSummary) {
+			out.WriteString(line + "\n")
+		}
+		out.WriteString("\nFilesystem Changes:\n")
+		for _, change := range a.state.DiffChanges {
+			out.WriteString(fmt.Sprintf("%s suspicious=%s | %s | %s\n", change["kind"], change["suspicious"], change["path"], change["detail"]))
+		}
+	case "timeline":
+		out.WriteString("Timeline Summary:\n")
+		for _, line := range sortedIntMapLines(a.state.TimelineSummary) {
+			out.WriteString(line + "\n")
+		}
+		out.WriteString("\nTimeline Events:\n")
+		for _, event := range a.state.TimelineEvents {
+			out.WriteString(fmt.Sprintf("%s | %s | %s | %s\n", event["time"], event["action"], event["actor"], event["details"]))
+		}
+	default:
+		out.WriteString("No structured context available for this screen.\n")
+	}
+
+	out.WriteString("\nPlease explain what looks suspicious, what may be benign, and the next 3 investigation steps.")
+	return out.String()
 }
 
 func sortedIntMapLines(values map[string]int) []string {

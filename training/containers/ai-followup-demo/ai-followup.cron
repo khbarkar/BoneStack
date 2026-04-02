@@ -1,0 +1,1 @@
+*/10 * * * * root echo "[demo] scheduled review of /opt/demo/bootstrap.sh" >> /proc/1/fd/1
