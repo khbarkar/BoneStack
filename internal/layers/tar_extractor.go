@@ -2,11 +2,14 @@ package layers
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/docker/docker/client"
@@ -38,6 +41,12 @@ type TarExtractor struct {
 	client *client.Client
 }
 
+type imageSaveManifest struct {
+	Config   string   `json:"Config"`
+	RepoTags []string `json:"RepoTags"`
+	Layers   []string `json:"Layers"`
+}
+
 // NewTarExtractor creates a new tar extractor
 func NewTarExtractor(dockerClient *client.Client) *TarExtractor {
 	return &TarExtractor{
@@ -61,6 +70,47 @@ func (te *TarExtractor) ExtractLayerTar(ctx context.Context, imageID, layerID st
 		LinkCount:  0,
 		SizeByType: make(map[string]int64),
 	}, nil
+}
+
+// ExtractImageLayers exports a Docker image tarball and extracts layer tar data in order.
+func (te *TarExtractor) ExtractImageLayers(ctx context.Context, imageID string) ([]LayerTarData, error) {
+	if te.client == nil {
+		return nil, fmt.Errorf("docker client not initialized")
+	}
+
+	reader, err := te.client.ImageSave(ctx, []string{imageID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to save image: %w", err)
+	}
+	defer reader.Close()
+
+	tmpFile, err := os.CreateTemp("", "bonestack-image-*.tar")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp image tar: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := io.Copy(tmpFile, reader); err != nil {
+		tmpFile.Close()
+		return nil, fmt.Errorf("failed to write image tar: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return nil, fmt.Errorf("failed to finalize image tar: %w", err)
+	}
+
+	return te.ExtractImageLayersFromFile(tmpPath)
+}
+
+// ExtractImageLayersFromFile parses a docker image archive and extracts all embedded layer tars.
+func (te *TarExtractor) ExtractImageLayersFromFile(imageTarPath string) ([]LayerTarData, error) {
+	file, err := os.Open(imageTarPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open image tar: %w", err)
+	}
+	defer file.Close()
+
+	return te.extractImageLayersFromReader(file)
 }
 
 // ExtractLayerTarFromFile extracts and parses a tar file from disk
@@ -90,6 +140,71 @@ func (te *TarExtractor) ExtractLayerTarFromFile(tarPath string) (*LayerTarData, 
 	defer gzipReader.Close()
 
 	return te.parseTarStream(gzipReader, data)
+}
+
+func (te *TarExtractor) extractImageLayersFromReader(reader io.Reader) ([]LayerTarData, error) {
+	tr := tar.NewReader(reader)
+	layerContents := make(map[string][]byte)
+	var manifest []imageSaveManifest
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("error reading image tar: %w", err)
+		}
+
+		switch {
+		case header.Name == "manifest.json":
+			data, err := io.ReadAll(tr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read manifest.json: %w", err)
+			}
+			if err := json.Unmarshal(data, &manifest); err != nil {
+				return nil, fmt.Errorf("failed to parse manifest.json: %w", err)
+			}
+		case strings.HasSuffix(header.Name, "/layer.tar"):
+			data, err := io.ReadAll(tr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read layer tar %s: %w", header.Name, err)
+			}
+			layerContents[header.Name] = data
+		}
+	}
+
+	if len(manifest) == 0 {
+		return nil, fmt.Errorf("manifest.json not found in image tar")
+	}
+
+	var layersData []LayerTarData
+	for _, layerPath := range manifest[0].Layers {
+		content, ok := layerContents[layerPath]
+		if !ok {
+			continue
+		}
+		data := &LayerTarData{
+			LayerID:    filepath.Base(filepath.Dir(layerPath)),
+			Files:      []FileEntry{},
+			TotalSize:  0,
+			FileCount:  0,
+			DirCount:   0,
+			LinkCount:  0,
+			SizeByType: make(map[string]int64),
+		}
+
+		parsed, err := te.parseTarStream(bytes.NewReader(content), data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse layer %s: %w", layerPath, err)
+		}
+		if parsed.LayerID == "" {
+			parsed.LayerID = layerPath
+		}
+		layersData = append(layersData, *parsed)
+	}
+
+	return layersData, nil
 }
 
 // parseTarStream reads and parses a tar stream

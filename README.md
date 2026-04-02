@@ -54,7 +54,10 @@ A tool for advanced Docker image and container diagnostics, forensics, and optim
 - **SDE Scaffold Generation** - Generate a starter Dockerfile and policy checklist from image metadata
   - Runtime profile inference
   - Best-practice Dockerfile templates
-  - Basic security and build-policy guidance
+  - Runtime-specific security and build-policy guidance
+  - Tar-analysis-aware language and package-manager detection
+  - On-demand tar-analysis status surfaced in the TUI
+  - Export generated scaffold files from the TUI
 
 ## Installation
 
@@ -115,7 +118,7 @@ go build -o bonestack ./cmd/bonestack/main.go
 - [x] Template-based Dockerfile generation
 - [x] Best-practice scaffolding
 - [x] Security policy templates
-- [ ] Automated dependency optimization
+- [x] Automated dependency optimization hints
 
 ### Phase 6: Advanced Features
 - [ ] Image comparison tools
@@ -168,16 +171,16 @@ Build an interactive, menu-driven container diagnostics tool that goes beyond si
 ✅ **Phase 2 Complete**: Layer analysis and advanced image inspection  
 ✅ **Phase 3 Complete**: Forensics screens now cover filesystem, processes, volumes, logs, environment, and resources  
 ✅ **Phase 4 Initial Implementation**: Optimization suggestions are available from analyzed images  
-🚧 **Phase 5 In Progress**: SDE scaffold generation is available; dependency-optimization output still needs deeper project analysis  
+✅ **Phase 5 Initial Implementation**: Tar-analysis-backed scaffold generation, runtime-specific security artifacts, exportable generated files, surfaced analysis status/errors, and dependency optimization hints are available  
 ⏱️ **Phase 6 Planned**: Advanced features and polish
 
 ## Next Step
 
-The immediate next milestone is to deepen Phase 5 and begin Phase 6:
+The immediate next milestone is Phase 6:
 
-- Improve generated Dockerfiles using tar-analysis/project-language signals
-- Add dependency-optimization guidance directly into scaffold output
-- Start report export and image-comparison workflows
+- Add report export in JSON, HTML, and CSV
+- Add image-comparison workflows
+- Add batch analysis and custom policy rules
 
 ## License
 

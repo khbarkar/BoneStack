@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -71,7 +73,7 @@ func TestResourceHealth(t *testing.T) {
 }
 
 func TestHandleImageDetailKeysRoutesToOptimization(t *testing.T) {
-	app := &App{state: &models.AppState{CurrentScreen: "image-detail"}}
+	app := &App{state: &models.AppState{CurrentScreen: "image-detail", ImageLayers: &layers.ImageLayers{}}}
 	model, _ := app.handleImageDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
 	updated := model.(*App)
 	if updated.state.CurrentScreen != "optimization" {
@@ -82,21 +84,36 @@ func TestHandleImageDetailKeysRoutesToOptimization(t *testing.T) {
 func TestRenderOptimizationWithoutLayers(t *testing.T) {
 	app := &App{
 		bloatDetector: layers.NewBloatDetector(),
-		state:         &models.AppState{CurrentScreen: "optimization"},
+		state:         &models.AppState{CurrentScreen: "optimization", AnalysisStatus: "Preparing optimization analysis..."},
 	}
 
 	out := app.renderOptimization()
-	if !strings.Contains(out, "Load layer analysis first") {
+	if !strings.Contains(out, "Preparing optimization analysis") {
 		t.Fatalf("unexpected optimization render output: %q", out)
 	}
 }
 
 func TestHandleImageDetailKeysRoutesToScaffold(t *testing.T) {
-	app := &App{state: &models.AppState{CurrentScreen: "image-detail"}}
+	app := &App{state: &models.AppState{CurrentScreen: "image-detail", ImageLayers: &layers.ImageLayers{}}}
 	model, _ := app.handleImageDetailKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
 	updated := model.(*App)
 	if updated.state.CurrentScreen != "scaffold" {
 		t.Fatalf("expected scaffold screen, got %q", updated.state.CurrentScreen)
+	}
+}
+
+func TestLayersLoadedMsgRoutesToTargetScreen(t *testing.T) {
+	app := &App{state: &models.AppState{CurrentScreen: "image-detail"}}
+	model, _ := app.Update(layersLoadedMsg{
+		layers:          &layers.ImageLayers{},
+		analyses:        []layers.LayerAnalysis{},
+		bloat:           map[int][]layers.BloatItem{},
+		recommendations: []string{},
+		targetScreen:    "optimization",
+	})
+	updated := model.(*App)
+	if updated.state.CurrentScreen != "optimization" {
+		t.Fatalf("expected optimization screen, got %q", updated.state.CurrentScreen)
 	}
 }
 
@@ -121,5 +138,59 @@ func TestRenderScaffoldWithoutDockerClient(t *testing.T) {
 	out := app.renderScaffold()
 	if !strings.Contains(out, "Error inspecting image") {
 		t.Fatalf("unexpected scaffold render output: %q", out)
+	}
+}
+
+func TestScaffoldAnalysisFindingLines(t *testing.T) {
+	lines := scaffoldAnalysisFindingLines([]layers.FileAnalysisResult{
+		{
+			PotentialBloat: []layers.BloatFinding{
+				{Path: "/var/cache/apt/pkg", Type: "cache", Severity: "high"},
+			},
+		},
+	})
+	if len(lines) != 1 || !strings.Contains(lines[0], "/var/cache/apt/pkg") {
+		t.Fatalf("unexpected analysis lines: %#v", lines)
+	}
+}
+
+func TestExportScaffoldWritesFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	defer os.Chdir(oldWd)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir failed: %v", err)
+	}
+
+	app := &App{
+		state: &models.AppState{
+			SelectedImage: docker.ImageSummary{RepoTags: []string{"example:latest"}},
+			Scaffold: sde.Scaffold{
+				Dockerfile: "FROM alpine:3.20",
+				SecurityArtifacts: []sde.GeneratedArtifact{
+					{Name: ".dockerignore", Content: ".git"},
+					{Name: "policy/test.md", Content: "policy"},
+				},
+			},
+		},
+	}
+
+	msg := app.exportScaffold()().(scaffoldExportedMsg)
+	if !strings.Contains(msg.message, "wrote scaffold files") {
+		t.Fatalf("unexpected export message: %q", msg.message)
+	}
+
+	wantFiles := []string{
+		filepath.Join(tmpDir, ".bonestack", "scaffolds", "example_latest", "Dockerfile.generated"),
+		filepath.Join(tmpDir, ".bonestack", "scaffolds", "example_latest", ".dockerignore"),
+		filepath.Join(tmpDir, ".bonestack", "scaffolds", "example_latest", "policy", "test.md"),
+	}
+	for _, file := range wantFiles {
+		if _, err := os.Stat(file); err != nil {
+			t.Fatalf("expected exported file %s: %v", file, err)
+		}
 	}
 }

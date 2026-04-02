@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"os"
 	"testing"
 )
@@ -233,6 +234,113 @@ func TestExtractLayerTarFromFileGzipped(t *testing.T) {
 
 	if len(data.Files) != 1 {
 		t.Errorf("Expected 1 file, got %d", len(data.Files))
+	}
+}
+
+func TestExtractImageLayersFromFile(t *testing.T) {
+	layerBuf := new(bytes.Buffer)
+	layerTar := tar.NewWriter(layerBuf)
+	header := &tar.Header{Name: "app/main.py", Size: int64(len("print('ok')"))}
+	if err := layerTar.WriteHeader(header); err != nil {
+		t.Fatalf("failed to write layer header: %v", err)
+	}
+	if _, err := layerTar.Write([]byte("print('ok')")); err != nil {
+		t.Fatalf("failed to write layer body: %v", err)
+	}
+	if err := layerTar.Close(); err != nil {
+		t.Fatalf("failed to close layer tar: %v", err)
+	}
+
+	manifest, err := json.Marshal([]map[string]interface{}{
+		{
+			"Config":   "config.json",
+			"RepoTags": []string{"example:latest"},
+			"Layers":   []string{"layer1/layer.tar"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal manifest: %v", err)
+	}
+
+	imageBuf := new(bytes.Buffer)
+	imageTar := tar.NewWriter(imageBuf)
+	writeEntry := func(name string, data []byte) {
+		h := &tar.Header{Name: name, Size: int64(len(data))}
+		if err := imageTar.WriteHeader(h); err != nil {
+			t.Fatalf("failed to write image header %s: %v", name, err)
+		}
+		if _, err := imageTar.Write(data); err != nil {
+			t.Fatalf("failed to write image entry %s: %v", name, err)
+		}
+	}
+	writeEntry("manifest.json", manifest)
+	writeEntry("config.json", []byte(`{}`))
+	writeEntry("layer1/layer.tar", layerBuf.Bytes())
+	if err := imageTar.Close(); err != nil {
+		t.Fatalf("failed to close image tar: %v", err)
+	}
+
+	tmpfile, err := os.CreateTemp("", "image-*.tar")
+	if err != nil {
+		t.Fatalf("failed to create temp image tar: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+	if _, err := tmpfile.Write(imageBuf.Bytes()); err != nil {
+		t.Fatalf("failed to write temp image tar: %v", err)
+	}
+	if err := tmpfile.Close(); err != nil {
+		t.Fatalf("failed to close temp image tar: %v", err)
+	}
+
+	extractor := NewTarExtractor(nil)
+	layersData, err := extractor.ExtractImageLayersFromFile(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("failed to extract image layers: %v", err)
+	}
+	if len(layersData) != 1 {
+		t.Fatalf("expected 1 layer, got %d", len(layersData))
+	}
+	if layersData[0].FileCount != 1 {
+		t.Fatalf("expected 1 file in layer, got %d", layersData[0].FileCount)
+	}
+	if layersData[0].LayerID != "layer1" {
+		t.Fatalf("expected layer id layer1, got %q", layersData[0].LayerID)
+	}
+}
+
+func TestFileAnalyzerDetectRustFromCargoFiles(t *testing.T) {
+	data := &LayerTarData{
+		Files: []FileEntry{
+			{Name: "Cargo.toml", Size: 120},
+			{Name: "Cargo.lock", Size: 400},
+		},
+		TotalSize: 520,
+		FileCount: 2,
+	}
+
+	analyzer := NewFileAnalyzer()
+	result := analyzer.AnalyzeTarData(data)
+
+	foundRust := false
+	for _, lang := range result.LanguageDetected {
+		if lang == "Rust" {
+			foundRust = true
+			break
+		}
+	}
+	if !foundRust {
+		t.Fatalf("expected Rust language detection, got %#v", result.LanguageDetected)
+	}
+
+	foundCargo := false
+	for _, pm := range result.PackageManagers {
+		if pm == "cargo" {
+			foundCargo = true
+			break
+		}
+	}
+	if !foundCargo {
+		t.Fatalf("expected cargo package manager detection, got %#v", result.PackageManagers)
 	}
 }
 

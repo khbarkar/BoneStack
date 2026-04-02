@@ -40,6 +40,9 @@ type AppState struct {
 	// UI state
 	ScrollOffset int
 	FilterText string
+	AnalysisStatus string
+	AnalysisError string
+	ExportMessage string
 	
 	Error string
 }

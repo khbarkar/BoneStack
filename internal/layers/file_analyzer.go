@@ -3,6 +3,7 @@ package layers
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -248,33 +249,45 @@ func (fa *FileAnalyzer) analyzePotentialBloat(data *LayerTarData) []BloatFinding
 func (fa *FileAnalyzer) detectLanguages(data *LayerTarData) []string {
 	detected := make(map[string]bool)
 
-	languagePatterns := map[string][]string{
-		"Python":     {".py", "/site-packages", "/dist-packages"},
-		"JavaScript": {".js", ".json", "node_modules", "package.json"},
-		"Java":       {".jar", ".class", ".war", "/classes"},
-		"Go":         {".go", "go.mod", "go.sum"},
-		"Ruby":       {".rb", "/gems", "Gemfile"},
-		"C/C++":      {".c", ".cpp", ".h", ".o"},
-		"PHP":        {".php", "/vendor"},
-		"Rust":       {".rs", "Cargo.toml"},
-		"Shell":      {".sh", "/bin", "/sbin"},
+	extensions := fa.analyzeExtensions(data)
+	fileNames := make([]string, 0, len(data.Files))
+	for _, f := range data.Files {
+		fileNames = append(fileNames, strings.ToLower(f.Name))
 	}
 
-	extensions := fa.analyzeExtensions(data)
-
-	for lang, patterns := range languagePatterns {
-		for _, pattern := range patterns {
-			if _, exists := extensions[pattern]; exists || strings.Contains(fmt.Sprint(extensions), pattern) {
-				detected[lang] = true
-				break
-			}
-		}
+	if hasExtension(extensions, ".py") || containsAnyPath(fileNames, []string{"/site-packages", "/dist-packages"}) {
+		detected["Python"] = true
+	}
+	if hasExtension(extensions, ".js") || containsAnyPath(fileNames, []string{"node_modules", "package.json"}) {
+		detected["JavaScript"] = true
+	}
+	if hasAnyExtension(extensions, []string{".jar", ".class", ".war"}) || containsAnyPath(fileNames, []string{"/classes"}) {
+		detected["Java"] = true
+	}
+	if hasExtension(extensions, ".go") || containsAnyPath(fileNames, []string{"go.mod", "go.sum"}) {
+		detected["Go"] = true
+	}
+	if hasExtension(extensions, ".rb") || containsAnyPath(fileNames, []string{"/gems", "gemfile"}) {
+		detected["Ruby"] = true
+	}
+	if hasAnyExtension(extensions, []string{".c", ".cpp", ".h", ".o"}) {
+		detected["C/C++"] = true
+	}
+	if hasExtension(extensions, ".php") || containsAnyPath(fileNames, []string{"/vendor"}) {
+		detected["PHP"] = true
+	}
+	if hasExtension(extensions, ".rs") || containsAnyPath(fileNames, []string{"cargo.toml", "cargo.lock"}) {
+		detected["Rust"] = true
+	}
+	if hasExtension(extensions, ".sh") || containsAnyPath(fileNames, []string{"/bin", "/sbin"}) {
+		detected["Shell"] = true
 	}
 
 	var languages []string
 	for lang := range detected {
 		languages = append(languages, lang)
 	}
+	sort.Strings(languages)
 
 	return languages
 }
@@ -308,8 +321,34 @@ func (fa *FileAnalyzer) detectPackageManagers(data *LayerTarData) []string {
 	for pm := range detected {
 		managers = append(managers, pm)
 	}
+	sort.Strings(managers)
 
 	return managers
+}
+
+func hasExtension(extensions map[string]*ExtensionInfo, ext string) bool {
+	_, ok := extensions[ext]
+	return ok
+}
+
+func hasAnyExtension(extensions map[string]*ExtensionInfo, exts []string) bool {
+	for _, ext := range exts {
+		if hasExtension(extensions, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyPath(paths []string, patterns []string) bool {
+	for _, path := range paths {
+		for _, pattern := range patterns {
+			if strings.Contains(path, strings.ToLower(pattern)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Summary returns a text summary of the analysis

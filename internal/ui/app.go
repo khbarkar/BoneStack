@@ -3,6 +3,8 @@ package ui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -40,6 +42,8 @@ type App struct {
 	layerAnalyzer       *layers.Analyzer
 	bloatDetector       *layers.BloatDetector
 	diffEngine          *layers.DiffEngine
+	tarExtractor        *layers.TarExtractor
+	fileAnalyzer        *layers.FileAnalyzer
 	containerInspector  *forensics.ContainerInspector
 	fsInspector         *forensics.FileSystemInspector
 	processAnalyzer     *forensics.ProcessAnalyzer
@@ -62,6 +66,8 @@ func NewApp(ctx context.Context, dockerClient *docker.Client) *App {
 		layerAnalyzer:      layers.NewAnalyzer(dockerClient),
 		bloatDetector:      layers.NewBloatDetector(),
 		diffEngine:         layers.NewDiffEngine(),
+		tarExtractor:       layers.NewTarExtractor(dockerClient.Raw()),
+		fileAnalyzer:       layers.NewFileAnalyzer(),
 		containerInspector: containerInspector,
 		fsInspector:        forensics.NewFileSystemInspector(containerInspector),
 		processAnalyzer:    forensics.NewProcessAnalyzer(containerInspector),
@@ -98,8 +104,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.state.LayerAnalyses = msg.analyses
 		a.state.BloatDetection = msg.bloat
 		a.state.LayerRecommendations = msg.recommendations
-		a.state.CurrentScreen = "layers"
+		a.state.AnalysisStatus = msg.analysisStatus
+		a.state.AnalysisError = msg.analysisError
+		a.state.CurrentScreen = msg.targetScreen
 		a.state.SelectedLayerIndex = 0
+	case scaffoldExportedMsg:
+		a.state.ExportMessage = msg.message
 	}
 	return a, nil
 }
@@ -218,11 +228,28 @@ func (a *App) handleContainersKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (a *App) handleImageDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "l":
-		// Load and analyze layers
-		return a, a.loadLayers()
+		a.state.CurrentScreen = "layers"
+		a.state.AnalysisStatus = "Preparing image layer analysis..."
+		a.state.AnalysisError = ""
+		a.state.ExportMessage = ""
+		return a, a.loadLayersFor("layers")
 	case "g":
+		if a.state.ImageLayers == nil {
+			a.state.CurrentScreen = "scaffold"
+			a.state.AnalysisStatus = "Preparing image and tar analysis for scaffold generation..."
+			a.state.AnalysisError = ""
+			a.state.ExportMessage = ""
+			return a, a.loadLayersFor("scaffold")
+		}
 		a.state.CurrentScreen = "scaffold"
 	case "o":
+		if a.state.ImageLayers == nil {
+			a.state.CurrentScreen = "optimization"
+			a.state.AnalysisStatus = "Preparing optimization analysis..."
+			a.state.AnalysisError = ""
+			a.state.ExportMessage = ""
+			return a, a.loadLayersFor("optimization")
+		}
 		a.state.CurrentScreen = "optimization"
 	case "esc", "b":
 		a.state.CurrentScreen = "images"
@@ -464,6 +491,9 @@ func (a *App) handleLayersKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Show size breakdown
 		a.state.CurrentScreen = "size-breakdown"
 	case "o":
+		if a.state.ImageLayers == nil {
+			return a, a.loadLayersFor("optimization")
+		}
 		a.state.CurrentScreen = "optimization"
 	case "esc", "b":
 		a.state.CurrentScreen = "image-detail"
@@ -509,6 +539,8 @@ func (a *App) handleOptimizationKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (a *App) handleScaffoldKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "w":
+		return a, a.exportScaffold()
 	case "esc", "b":
 		a.state.CurrentScreen = "image-detail"
 	}
@@ -691,7 +723,7 @@ func safeSlice(s string, length int) string {
 	return s[:length]
 }
 
-func (a *App) loadLayers() tea.Cmd {
+func (a *App) loadLayersFor(targetScreen string) tea.Cmd {
 	return func() tea.Msg {
 		imageLayers, err := a.layerAnalyzer.AnalyzeImage(a.ctx, a.state.SelectedImage.ID)
 		if err != nil {
@@ -703,15 +735,48 @@ func (a *App) loadLayers() tea.Cmd {
 		analyses, _ := a.layerAnalyzer.AnalyzeLayerSequence(imageLayers)
 		bloatMap := a.bloatDetector.DetectInImage(imageLayers)
 		recommendations := a.bloatDetector.GenerateRecommendations(imageLayers, bloatMap)
+		layerTarData, fileAnalyses, tarErr := a.loadLayerTarAnalysis(a.state.SelectedImage.ID)
+		a.state.LayerTarData = layerTarData
+		a.state.FileAnalysis = fileAnalyses
 		a.state.OptimizationReport = a.bloatDetector.BuildOptimizationReport(imageLayers, bloatMap)
+		analysisStatus := fmt.Sprintf("Layer analysis ready. Tar analysis processed %d layers.", len(fileAnalyses))
+		analysisError := ""
+		if tarErr != nil {
+			analysisStatus = "Layer analysis ready. Tar analysis unavailable."
+			analysisError = tarErr.Error()
+		}
 
 		return layersLoadedMsg{
 			layers:          imageLayers,
 			analyses:        analyses,
 			bloat:           bloatMap,
 			recommendations: recommendations,
+			analysisStatus:  analysisStatus,
+			analysisError:   analysisError,
+			targetScreen:    targetScreen,
 		}
 	}
+}
+
+func (a *App) loadLayerTarAnalysis(imageID string) ([]layers.LayerTarData, []layers.FileAnalysisResult, error) {
+	if a.tarExtractor == nil || a.fileAnalyzer == nil {
+		return nil, nil, fmt.Errorf("tar analysis helpers not initialized")
+	}
+
+	layerData, err := a.tarExtractor.ExtractImageLayers(a.ctx, imageID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	analyses := make([]layers.FileAnalysisResult, 0, len(layerData))
+	for _, tarData := range layerData {
+		analysis := a.fileAnalyzer.AnalyzeTarData(&tarData)
+		if analysis != nil {
+			analyses = append(analyses, *analysis)
+		}
+	}
+
+	return layerData, analyses, nil
 }
 
 func minInt(a, b int) int {
@@ -751,6 +816,13 @@ type layersLoadedMsg struct {
 	analyses        []layers.LayerAnalysis
 	bloat           map[int][]layers.BloatItem
 	recommendations []string
+	analysisStatus  string
+	analysisError   string
+	targetScreen    string
+}
+
+type scaffoldExportedMsg struct {
+	message string
 }
 
 // renderFileBrowser displays file information for a layer
@@ -1225,8 +1297,15 @@ func (a *App) renderOptimization() string {
 	output.WriteString(titleStyle.Render("⚡ Optimization Suggestions") + "\n\n")
 
 	if a.state.ImageLayers == nil {
-		output.WriteString("Load layer analysis first from image details.\n\n")
-		output.WriteString(helpStyle.Render("Open an image and press l before viewing optimization advice."))
+		if a.state.AnalysisStatus != "" {
+			output.WriteString(a.state.AnalysisStatus + "\n")
+		} else {
+			output.WriteString("Load layer analysis first from image details.\n")
+		}
+		if a.state.AnalysisError != "" {
+			output.WriteString("\nTar Analysis Error: " + a.state.AnalysisError + "\n")
+		}
+		output.WriteString("\n" + helpStyle.Render("Open an image and press l before viewing optimization advice."))
 		output.WriteString("\n\n" + helpStyle.Render("b Back | q Quit"))
 		return output.String()
 	}
@@ -1238,6 +1317,12 @@ func (a *App) renderOptimization() string {
 	output.WriteString(fmt.Sprintf("Bloat Findings:     %d\n", report.BloatItemCount))
 	output.WriteString(fmt.Sprintf("Estimated Savings:  %s\n", layers.SizeFormatter(report.EstimatedSavings)))
 	output.WriteString(fmt.Sprintf("Largest Layer Share: %.1f%%\n", largestLayerPercent(a.state.ImageLayers)))
+	if a.state.AnalysisStatus != "" {
+		output.WriteString(fmt.Sprintf("Analysis Status:    %s\n", a.state.AnalysisStatus))
+	}
+	if a.state.AnalysisError != "" {
+		output.WriteString(fmt.Sprintf("Tar Analysis Error: %s\n", a.state.AnalysisError))
+	}
 
 	output.WriteString("\nRecommendations:\n")
 	if len(report.Recommendations) == 0 {
@@ -1245,6 +1330,14 @@ func (a *App) renderOptimization() string {
 	} else {
 		for i, rec := range report.Recommendations {
 			output.WriteString(fmt.Sprintf("  %d. %s\n", i+1, rec))
+		}
+	}
+
+	layerLines := optimizationLayerFindingLines(a.state.ImageLayers, a.state.BloatDetection)
+	if len(layerLines) > 0 {
+		output.WriteString("\nLayers With Findings:\n")
+		for _, line := range layerLines {
+			output.WriteString("  " + line + "\n")
 		}
 	}
 
@@ -1274,7 +1367,7 @@ func (a *App) renderScaffold() string {
 		imageName = a.state.SelectedImage.RepoTags[0]
 	}
 
-	scaffold := a.scaffoldGenerator.Generate(imageName, inspect)
+	scaffold := a.scaffoldGenerator.GenerateWithAnalysis(imageName, inspect, a.state.FileAnalysis)
 	a.state.Scaffold = scaffold
 
 	output.WriteString(fmt.Sprintf("Base Image:   %s\n", scaffold.Profile.BaseImage))
@@ -1283,17 +1376,88 @@ func (a *App) renderScaffold() string {
 	if len(scaffold.Profile.ExposedPorts) > 0 {
 		output.WriteString(fmt.Sprintf("Exposed:      %s\n", strings.Join(scaffold.Profile.ExposedPorts, ", ")))
 	}
+	if len(scaffold.Profile.DetectedLanguages) > 0 {
+		output.WriteString(fmt.Sprintf("Languages:    %s\n", strings.Join(scaffold.Profile.DetectedLanguages, ", ")))
+	}
+	if len(scaffold.Profile.PackageManagers) > 0 {
+		output.WriteString(fmt.Sprintf("Pkg Managers: %s\n", strings.Join(scaffold.Profile.PackageManagers, ", ")))
+	}
+	if a.state.AnalysisStatus != "" {
+		output.WriteString(fmt.Sprintf("Analysis:     %s\n", a.state.AnalysisStatus))
+	}
+	if a.state.AnalysisError != "" {
+		output.WriteString(fmt.Sprintf("Tar Error:    %s\n", a.state.AnalysisError))
+	}
+	if a.state.ExportMessage != "" {
+		output.WriteString(fmt.Sprintf("Export:       %s\n", a.state.ExportMessage))
+	}
 
 	output.WriteString("\nPolicy Checklist:\n")
 	for _, item := range scaffold.PolicyChecklist {
 		output.WriteString(fmt.Sprintf("  - %s\n", item))
 	}
 
+	if len(scaffold.SecurityArtifacts) > 0 {
+		output.WriteString("\nGenerated Policy Templates:\n")
+		for _, artifact := range scaffold.SecurityArtifacts {
+			output.WriteString(fmt.Sprintf("\n[%s]\n", artifact.Name))
+			output.WriteString("─────────────────────────────────────────────────────\n")
+			output.WriteString(artifact.Content)
+			output.WriteString("\n")
+		}
+	}
+
+	analysisLines := scaffoldAnalysisFindingLines(a.state.FileAnalysis)
+	if len(analysisLines) > 0 {
+		output.WriteString("\nTar Analysis Highlights:\n")
+		for _, line := range analysisLines {
+			output.WriteString("  - " + line + "\n")
+		}
+	}
+
 	output.WriteString("\nGenerated Dockerfile:\n")
 	output.WriteString("─────────────────────────────────────────────────────\n")
 	output.WriteString(scaffold.Dockerfile)
-	output.WriteString("\n\n" + helpStyle.Render("b Back | q Quit"))
+	output.WriteString("\n\n" + helpStyle.Render("w Write Files | b Back | q Quit"))
 	return output.String()
+}
+
+func (a *App) exportScaffold() tea.Cmd {
+	return func() tea.Msg {
+		scaffold := a.state.Scaffold
+		if scaffold.Dockerfile == "" {
+			return scaffoldExportedMsg{message: "nothing to export yet"}
+		}
+
+		imageName := safeSlice(a.state.SelectedImage.ID, 12)
+		if len(a.state.SelectedImage.RepoTags) > 0 {
+			imageName = a.state.SelectedImage.RepoTags[0]
+		}
+		dirName := sanitizeFilename(imageName)
+		exportDir := filepath.Join(".bonestack", "scaffolds", dirName)
+		if err := os.MkdirAll(exportDir, 0755); err != nil {
+			return scaffoldExportedMsg{message: "export failed: " + err.Error()}
+		}
+
+		files := map[string]string{
+			"Dockerfile.generated": scaffold.Dockerfile,
+		}
+		for _, artifact := range scaffold.SecurityArtifacts {
+			files[artifact.Name] = artifact.Content
+		}
+
+		for relPath, content := range files {
+			fullPath := filepath.Join(exportDir, relPath)
+			if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+				return scaffoldExportedMsg{message: "export failed: " + err.Error()}
+			}
+			if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+				return scaffoldExportedMsg{message: "export failed: " + err.Error()}
+			}
+		}
+
+		return scaffoldExportedMsg{message: "wrote scaffold files to " + exportDir}
+	}
 }
 
 func resourceHealth(stats *forensics.ResourceStats) string {
@@ -1325,6 +1489,44 @@ func largestLayerPercent(imageLayers *layers.ImageLayers) float64 {
 	}
 
 	return layers.PercentageOfTotal(largest, total)
+}
+
+func optimizationLayerFindingLines(imageLayers *layers.ImageLayers, bloat map[int][]layers.BloatItem) []string {
+	if imageLayers == nil {
+		return nil
+	}
+
+	lines := []string{}
+	for i, items := range bloat {
+		if len(items) == 0 || i >= len(imageLayers.Layers) {
+			continue
+		}
+		layer := imageLayers.Layers[i]
+		lines = append(lines, fmt.Sprintf("Layer %d: %d findings, %s, %s", i, len(items), layers.SizeFormatter(layer.Size), safeSlice(layer.Command, minInt(60, len(layer.Command)))))
+	}
+	sort.Strings(lines)
+	if len(lines) > 6 {
+		lines = lines[:6]
+	}
+	return lines
+}
+
+func scaffoldAnalysisFindingLines(analyses []layers.FileAnalysisResult) []string {
+	lines := []string{}
+	for _, analysis := range analyses {
+		for _, finding := range analysis.PotentialBloat {
+			lines = append(lines, fmt.Sprintf("%s (%s, %s)", finding.Path, finding.Type, finding.Severity))
+			if len(lines) >= 6 {
+				return lines
+			}
+		}
+	}
+	return lines
+}
+
+func sanitizeFilename(name string) string {
+	replacer := strings.NewReplacer("/", "_", ":", "_", "@", "_", " ", "_")
+	return replacer.Replace(name)
 }
 
 func sortedIntMapLines(values map[string]int) []string {
